@@ -130,5 +130,16 @@
     "chart_pages": 0,
     "fact_count": 28,
     "region_count": 63
+  },
+  "unit 1.pdf": {
+    "doc": "unit 1.pdf",
+    "sha256": "0715964034ccc965864778cd18b7d6e1124293ed44383c1b78484740744429ff",
+    "pages": 19,
+    "text_pages": 19,
+    "scan_pages": 0,
+    "table_pages": 0,
+    "chart_pages": 5,
+    "fact_count": 63,
+    "region_count": 455
   }
 }

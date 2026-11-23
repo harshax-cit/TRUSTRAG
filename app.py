@@ -43,7 +43,10 @@ from config import (
     ROLE_TABS, GovernmentModeViolation,
 )
 from auth import authenticate, get_role_info, is_authorised, AuthError
-from tracerag.ui import apply_enterprise_theme, render_top_navbar, render_dashboard_metrics
+from tracerag.ui import (
+    apply_enterprise_theme, render_top_navbar, render_dashboard_metrics,
+    render_page_header, stat_row, evidence_box, empty_state,
+)
 from tracerag.docstore import (
     register_document, list_user_documents, get_document,
     delete_document, update_document_status
@@ -1273,186 +1276,120 @@ def view_help_and_support(user, is_gov):
 def main():
     st.set_page_config(
         page_title="TraceRAG",
-        page_icon="📄",
+        page_icon="🌿",
         layout="wide",
         initial_sidebar_state="expanded",
     )
 
-    # Initialise navigation key BEFORE any widget reads it (Streamlit requirement)
-    if "enterprise_nav" not in st.session_state:
-        st.session_state["enterprise_nav"] = "🏠 Home"
+    apply_enterprise_theme()
 
-    # Login gate — single page for all roles
+    # Initialise nav keys before any widget reads them
+    for nav_key in ["nav_government","nav_analyst","nav_journalist",
+                    "nav_student","nav_factchecker","nav_auditor","enterprise_nav"]:
+        if nav_key not in st.session_state:
+            st.session_state[nav_key] = None
+
+    # Login gate
     if not st.session_state.get("user"):
         _show_login()
         return
 
     user   = st.session_state["user"]
-    role   = user["role"].lower().strip()
+    role   = user.get("role", "analyst").lower().strip()
     is_gov = (role == "government")
 
-    # Paths are scoped to the user's environment
     _idx_dir = ROOT / "data" / "gov_index" if is_gov else ROOT / "data" / "index"
     _pdf_dir = ROOT / "data" / "gov_pdfs"  if is_gov else ROOT / "data" / "raw" / "pdfs"
 
-    apply_enterprise_theme()
-    render_top_navbar(user, title="TraceRAG Enterprise Platform")
-
-    # Route strictly to independent role dashboard
-    if role == "government":
-        render_government_interface(user, _idx_dir, _pdf_dir)
-    elif role == "analyst":
-        render_analyst_interface(user, _idx_dir, _pdf_dir)
-    elif role == "journalist":
-        render_journalist_interface(user, _idx_dir, _pdf_dir)
-    elif role == "student":
-        render_student_dashboard(user, _idx_dir, _pdf_dir)
-    elif role == "factchecker":
-        render_factchecker_interface(user, _idx_dir, _pdf_dir)
-    elif role == "auditor":
-        render_auditor_dashboard(user, _idx_dir, _pdf_dir)
+    # Route to role dashboard
+    dispatch = {
+        "government":  lambda: render_government_interface(user, _idx_dir, _pdf_dir),
+        "analyst":     lambda: render_analyst_interface(user, _idx_dir, _pdf_dir),
+        "journalist":  lambda: render_journalist_interface(user, _idx_dir, _pdf_dir),
+        "student":     lambda: render_student_dashboard(user, _idx_dir, _pdf_dir),
+        "factchecker": lambda: render_factchecker_interface(user, _idx_dir, _pdf_dir),
+        "auditor":     lambda: render_auditor_dashboard(user, _idx_dir, _pdf_dir),
+    }
+    fn = dispatch.get(role)
+    if fn:
+        fn()
     else:
-        st.error(f"Unrecognized role: {role}")
+        st.error(f"Unknown role: {role}")
 
 
-# ── Login screen (single page, login + create account) ───────────────────────
+# ── Unified login screen ──────────────────────────────────────────────────────
 
 def _show_login():
-    apply_enterprise_theme()
-    col_l, col_m, col_r = st.columns([1, 2, 1])
-    with col_m:
-        st.markdown(
-            """
-            <div style="text-align:center; padding: 1.5rem 0 0.5rem 0;">
-                <div style="font-size:2.5rem; line-height:1;">🌿</div>
-                <h1 style="color:#0f281e; font-weight:800; margin-bottom:0.25rem;">TraceRAG</h1>
-                <p style="color:#64748b; font-size:0.95rem; margin-top:0;">Enterprise Multimodal Evidence-Intelligence Platform</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.divider()
+    """Single login page for all six roles."""
+    # centre column
+    _, col, _ = st.columns([1, 1, 1])
+    with col:
+        st.markdown("""
+        <div style="text-align:center;padding:2rem 0 1.5rem;">
+            <div style="font-size:2.5rem;line-height:1;margin-bottom:0.5rem;">🌿</div>
+            <h1 style="font-size:1.75rem;font-weight:800;color:#0f2318;margin:0 0 0.3rem;">TraceRAG</h1>
+            <p style="color:#6b7280;font-size:0.9rem;margin:0;">
+                Enterprise Multimodal Evidence-Intelligence Platform
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
 
-        tab_login, tab_register = st.tabs(["🔐 Sign In", "📝 Create Account"])
+        tab_in, tab_reg = st.tabs(["🔐 Sign In", "📝 Create Account"])
 
-        # ── Sign In tab ───────────────────────────────────────────────────────
-        with tab_login:
+        # ── Sign in ───────────────────────────────────────────────────────────
+        with tab_in:
             with st.form("login_form"):
-                username  = st.text_input("Username", placeholder="your-username")
-                password  = st.text_input("Password", type="password",
-                                           placeholder="your-password")
-                submitted = st.form_submit_button("Login →",
-                                                   width="stretch",
-                                                   type="primary")
-            if submitted:
+                username = st.text_input("Username", placeholder="your-username")
+                password = st.text_input("Password", type="password",
+                                          placeholder="your-password")
+                btn = st.form_submit_button("Sign in →", type="primary",
+                                             use_container_width=True)
+            if btn:
                 if not username or not password:
                     st.warning("Enter both username and password.")
                 else:
                     try:
                         user = authenticate(username, password)
                         st.session_state["user"] = user
-                        env_label = "🔒 Government Offline" if user["offline"] else "🌐 Online"
-                        ri = get_role_info(user["role"])
-                        st.success(
-                            f"{ri['icon']} Welcome **{user['name']}** — "
-                            f"entering **{env_label}** environment."
-                        )
-                        time.sleep(0.8)
+                        env = "🔒 Government Offline" if user.get("offline") else "🌐 Online"
+                        ri  = get_role_info(user["role"])
+                        st.success(f"{ri['icon']} Welcome **{user['name']}** — {env}")
+                        time.sleep(0.6)
                         st.rerun()
                     except AuthError as e:
-                        st.error(f"❌ {e}")
+                        st.error(str(e))
 
-        # ── Create Account tab ────────────────────────────────────────────────
-        with tab_register:
+        # ── Create account ────────────────────────────────────────────────────
+        with tab_reg:
             st.info("🔒 Government and Auditor accounts require administrator provisioning.")
             with st.form("register_form"):
-                reg_name  = st.text_input("Full Name", placeholder="Your Name")
-                reg_user  = st.text_input("Username",  placeholder="choose-a-username")
-                reg_pass  = st.text_input("Password",  type="password",
-                                           placeholder="at least 6 characters")
-                reg_pass2 = st.text_input("Confirm Password", type="password")
-                reg_role  = st.selectbox("Select Role", [
-                    "student", "analyst", "journalist", "factchecker"
-                ], format_func=lambda r: {
-                    "student":     "🎓 Student",
-                    "analyst":     "📊 Policy Analyst",
-                    "journalist":  "📰 Journalist",
-                    "factchecker": "🔍 Fact-Checker",
-                }.get(r, r))
-                reg_btn = st.form_submit_button("Create Account →",
-                                                 width="stretch",
-                                                 type="primary")
-            if reg_btn:
-                if reg_pass != reg_pass2:
+                rn = st.text_input("Full Name",  placeholder="Your Name")
+                ru = st.text_input("Username",   placeholder="choose-a-username")
+                rp = st.text_input("Password",   type="password",
+                                    placeholder="at least 6 characters")
+                rp2= st.text_input("Confirm Password", type="password")
+                rr = st.selectbox("Role", ["student","analyst","journalist","factchecker"],
+                                   format_func=lambda r: {
+                                       "student":    "🎓 Student",
+                                       "analyst":    "📊 Policy Analyst",
+                                       "journalist": "📰 Journalist",
+                                       "factchecker":"🔍 Fact-Checker",
+                                   }.get(r, r))
+                rbtn = st.form_submit_button("Create Account →", type="primary",
+                                              use_container_width=True)
+            if rbtn:
+                if rp != rp2:
                     st.error("Passwords do not match.")
                 else:
                     try:
                         from auth import create_account
-                        user = create_account(reg_user, reg_pass, reg_name, reg_role)
+                        user = create_account(ru, rp, rn, rr)
                         st.session_state["user"] = user
-                        st.success(
-                            f"✅ Account created! Welcome **{user['name']}**. "
-                            "Logging you in…"
-                        )
-                        time.sleep(0.8)
+                        st.success(f"✅ Account created! Welcome **{user['name']}**.")
+                        time.sleep(0.6)
                         st.rerun()
                     except AuthError as e:
-                        st.error(f"❌ {e}")
-
-
-# ── Government offline dashboard ──────────────────────────────────────────────
-
-def _government_dashboard(result, question, allowed, idx_dir):
-    """Offline dashboard for government role — local pipelines only."""
-    # Status bar
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Environment", "🔒 Offline")
-    c2.metric("AI",          "Local only")
-    c3.metric("Database",    "Local SQLite")
-    try:
-        from tracerag.audit import AuditLog
-        ok, _ = AuditLog(str(idx_dir)).verify_chain()
-        c4.metric("Audit Chain", "✅ Intact" if ok else "❌ Broken")
-    except Exception:
-        c4.metric("Audit Chain", "⚠️ N/A")
-    st.divider()
-
-    all_tab_defs = {
-        "📊 Analyst":      lambda: lens_analyst(result, question) if result else st.info("Ask a question via the sidebar."),
-        "🔍 Fact-checker": lens_factchecker,
-        "🔐 Auditor":      lens_auditor,
-        "📚 My PDFs":      study_tab_my_pdfs,
-    }
-    tab_names = [t for t in allowed if t in all_tab_defs]
-    tabs = st.tabs(tab_names)
-    for tab, name in zip(tabs, tab_names):
-        with tab:
-            all_tab_defs[name]()
-
-
-# ── Online dashboard ──────────────────────────────────────────────────────────
-
-def _online_dashboard(result, question, allowed):
-    all_tab_defs = {
-        "📊 Analyst":      lambda: lens_analyst(result, question) if result else st.info("Ask a question."),
-        "📰 Journalist":   lambda: lens_journalist(result, question) if result else st.info("Ask a question."),
-        "🎓 Student":      lambda: lens_student(result, question) if result else st.info("Ask a question."),
-        "🔍 Fact-checker": lens_factchecker,
-        "🔐 Auditor":      lens_auditor,
-        "📤 Upload":       study_tab_upload,
-        "📝 Summary":      study_tab_summary,
-        "🃏 Flashcards":   study_tab_flashcards,
-        "🧠 Quiz":         study_tab_quiz,
-        "▶️ Videos":       study_tab_videos,
-        "❓ Ask":          study_tab_ask,
-        "📈 Progress":     study_tab_progress,
-        "📚 My PDFs":      study_tab_my_pdfs,
-    }
-    tab_names = [t for t in allowed if t in all_tab_defs]
-    tabs = st.tabs(tab_names)
-    for tab, name in zip(tabs, tab_names):
-        with tab:
-            all_tab_defs[name]()
+                        st.error(str(e))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
