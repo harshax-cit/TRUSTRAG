@@ -646,6 +646,7 @@ def _study_session_state():
         "study_cards":       [],
         "study_leitner":     None,
         "study_quiz_q":      None,
+        "study_quiz_ans":    None,
         "study_quiz_score":  {"correct": 0, "total": 0},
         "study_flip":        {},    # card_id → bool (flipped?)
         "study_pdf_names":   [],
@@ -970,39 +971,70 @@ def study_tab_quiz():
     due   = deck.due_cards()
     score = st.session_state.study_quiz_score
 
-    st.metric("Session score",
-              f"{score['correct']}/{score['total']}",
-              delta=None)
+    col_score, col_btn = st.columns([2, 1])
+    with col_score:
+        st.metric("Session score",
+                  f"{score['correct']}/{score['total']}",
+                  delta=None)
+    with col_btn:
+        next_btn = st.button("Next question ▶", type="primary",
+                              use_container_width=True)
 
-    if st.button("Next question ▶"):
+    if next_btn:
         import random
         pool = due if due else cards
         card = random.choice(pool)
-        st.session_state.study_quiz_q = deck.make_quiz_question(card, cards)
+        st.session_state.study_quiz_q     = deck.make_quiz_question(card, cards)
+        st.session_state.study_quiz_ans   = None   # clear previous answer
+        st.rerun()
 
     q = st.session_state.study_quiz_q
     if not q:
-        st.info("Click 'Next question' to start.")
+        st.info("Click 'Next question ▶' to start.")
         return
 
+    # Show question
     st.markdown(f"### {q['question']}")
-    for choice in q["choices"]:
-        if st.button(choice, key=f"choice_{choice[:30]}"):
-            correct = choice == q["answer"]
-            score["total"] += 1
-            if correct:
-                score["correct"] += 1
-                deck.answer(q["card_id"], True)
-                st.success(f"✅ Correct! **{q['answer']}**")
-            else:
-                deck.answer(q["card_id"], False)
-                st.error(f"❌ Incorrect. Answer: **{q['answer']}**")
-            st.session_state.study_quiz_q = None
+    st.caption(f"Card type: {cards[0].get('type','') if cards else ''} · "
+               f"Source: {q.get('doc','?')} p.{q.get('page','?')}")
+    st.divider()
 
-            if dirs:
-                _render_source(q.get("doc",""), q.get("page"),
-                               q.get("bbox"), dirs)
-            st.rerun()
+    # Show result if already answered this question
+    prev_ans = st.session_state.get("study_quiz_ans")
+    if prev_ans is not None:
+        if prev_ans == q["answer"]:
+            st.success(f"✅ Correct! **{q['answer']}**")
+        else:
+            st.error(f"❌ Incorrect. You chose: **{prev_ans}**")
+            st.info(f"Correct answer: **{q['answer']}**")
+        # Show source page
+        if dirs and q.get("doc") and q.get("page"):
+            _render_source(q.get("doc",""), q.get("page"),
+                           q.get("bbox"), dirs)
+        return
+
+    # Render choices as radio (avoids duplicate key issues with buttons)
+    choice_labels = [f"{chr(65+i)}. {c}" for i, c in enumerate(q["choices"])]
+    selected = st.radio("Choose your answer:", choice_labels,
+                        index=None, key=f"quiz_radio_{q['card_id']}")
+
+    submit = st.button("Submit ✔", disabled=selected is None,
+                       use_container_width=True)
+
+    if submit and selected is not None:
+        # Extract the actual answer text (strip "A. " prefix)
+        chosen = selected[3:]   # remove "X. "
+        correct = chosen == q["answer"]
+
+        score["total"] += 1
+        if correct:
+            score["correct"] += 1
+            deck.answer(q["card_id"], True)
+        else:
+            deck.answer(q["card_id"], False)
+
+        st.session_state.study_quiz_ans = chosen
+        st.rerun()
 
 
 # ── Tab: Videos ──────────────────────────────────────────────────────────────
