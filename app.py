@@ -576,6 +576,13 @@ def main():
         "🎓 Student",
         "🔍 Fact-checker",
         "🔐 Auditor",
+        "📤 Upload",
+        "📝 Summary",
+        "🃏 Flashcards",
+        "🧠 Quiz",
+        "▶️ Videos",
+        "❓ Ask",
+        "📈 Progress",
     ])
 
     with tabs[0]:
@@ -601,6 +608,537 @@ def main():
 
     with tabs[4]:
         lens_auditor()
+
+    with tabs[5]:
+        study_tab_upload()
+
+    with tabs[6]:
+        study_tab_summary()
+
+    with tabs[7]:
+        study_tab_flashcards()
+
+    with tabs[8]:
+        study_tab_quiz()
+
+    with tabs[9]:
+        study_tab_videos()
+
+    with tabs[10]:
+        study_tab_ask()
+
+    with tabs[11]:
+        study_tab_progress()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STUDENT STUDY MODE — tabs 5-11
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _study_session_state():
+    """Initialise all study-mode session state keys."""
+    defaults = {
+        "study_session_id":  None,
+        "study_dirs":        None,
+        "study_manifest":    {},
+        "study_topics":      [],
+        "study_summaries":   {},
+        "study_cards":       [],
+        "study_leitner":     None,
+        "study_quiz_q":      None,
+        "study_quiz_score":  {"correct": 0, "total": 0},
+        "study_flip":        {},    # card_id → bool (flipped?)
+        "study_pdf_names":   [],
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+
+def _render_source(doc: str, page: int, bbox, session_dirs: dict):
+    """Render a PDF page with highlight inside an expander."""
+    if not doc or not page:
+        return
+    pdf_path = session_dirs["pdfs"] / doc
+    if not pdf_path.exists():
+        # Try shared collection
+        pdf_path = PDF_DIR / doc
+    if not pdf_path.exists():
+        return
+    img = render_page_bytes(str(pdf_path), page, bbox, dpi=120)
+    if img:
+        with st.expander(f"📄 Source: {doc} p.{page}"):
+            st.image(img, use_container_width=True)
+
+
+# ── Tab: Upload ───────────────────────────────────────────────────────────────
+
+def study_tab_upload():
+    _study_session_state()
+    from study.upload import (
+        new_session_id, session_dirs, validate_pdf, save_upload,
+        ingest_session_pdf, sha256_of, log_upload, delete_session,
+        cleanup_expired_sessions, get_ocr_stats, UploadError,
+        MAX_UPLOAD_MB, MAX_PAGES,
+    )
+
+    st.subheader("📤 Upload Your PDF")
+    st.caption(
+        f"Max {MAX_UPLOAD_MB} MB · Max {MAX_PAGES} pages · "
+        "No password-protected or JavaScript-containing files."
+    )
+
+    # Auto-cleanup expired sessions
+    cleanup_expired_sessions()
+
+    uploaded = st.file_uploader(
+        "Choose one or more PDFs",
+        type=["pdf"],
+        accept_multiple_files=True,
+    )
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        process_btn = st.button("Process PDFs ▶", type="primary",
+                                use_container_width=True,
+                                disabled=not uploaded)
+    with col2:
+        delete_btn = st.button("🗑 Delete my files",
+                               use_container_width=True,
+                               disabled=st.session_state.study_session_id is None)
+
+    if delete_btn and st.session_state.study_session_id:
+        delete_session(st.session_state.study_session_id)
+        for k in list(st.session_state.keys()):
+            if k.startswith("study_"):
+                del st.session_state[k]
+        _study_session_state()
+        st.success("Files deleted.")
+        st.rerun()
+
+    if not process_btn or not uploaded:
+        if st.session_state.study_session_id:
+            st.info(f"Session active: `{st.session_state.study_session_id[:8]}…`  "
+                    f"({len(st.session_state.study_pdf_names)} file(s) loaded)")
+        return
+
+    # New session
+    sid  = new_session_id()
+    dirs = session_dirs(sid)
+
+    progress = st.progress(0.0, text="Validating…")
+    errors   = []
+    saved    = []
+
+    for i, uf in enumerate(uploaded):
+        pct = (i / len(uploaded)) * 0.3
+        progress.progress(pct, text=f"Validating {uf.name}…")
+        data = uf.read()
+        try:
+            validate_pdf(data, uf.name)
+            save_upload(sid, uf.name, data)
+            log_upload(sid, uf.name, sha256_of(data), str(dirs["index"]))
+            saved.append(uf.name)
+        except UploadError as e:
+            errors.append(f"**{uf.name}**: {e}")
+
+    if errors:
+        for err in errors:
+            st.error(err)
+        if not saved:
+            return
+
+    progress.progress(0.4, text="Parsing and indexing…")
+    try:
+        manifest = ingest_session_pdf(sid, saved[0])
+    except Exception as e:
+        st.error(f"Indexing failed: {e}")
+        return
+
+    progress.progress(0.9, text="Building topics…")
+
+    from study.topics import extract_topics
+    topics     = []
+    summaries  = {}
+    all_cards  = []
+
+    for fname in saved:
+        pdf_path  = str(dirs["pdfs"] / fname)
+        reg_jsonl = str(dirs["index"] / "regions.jsonl")
+        t = extract_topics(pdf_path, reg_jsonl)
+        topics.extend(t)
+
+        from study.summarise import summarise_topic
+        from study.flashcards import generate_cards
+        for topic in t:
+            s = summarise_topic(topic, str(dirs["index"]), fname)
+            summaries[topic["id"]] = s
+            cards = generate_cards(topic, s, str(dirs["index"]),
+                                   fname, pdf_path)
+            all_cards.extend(cards)
+
+    from study.leitner import LeitnerDeck
+    deck = LeitnerDeck(all_cards)
+
+    # Store in session state
+    st.session_state.study_session_id = sid
+    st.session_state.study_dirs       = dirs
+    st.session_state.study_manifest   = manifest
+    st.session_state.study_topics     = topics
+    st.session_state.study_summaries  = summaries
+    st.session_state.study_cards      = all_cards
+    st.session_state.study_leitner    = deck
+    st.session_state.study_pdf_names  = saved
+
+    progress.progress(1.0, text="Done!")
+
+    st.success(
+        f"✅ Indexed {len(saved)} file(s) · "
+        f"{len(topics)} topics · {len(all_cards)} cards"
+    )
+
+    # OCR warning
+    ocr = get_ocr_stats(sid)
+    for doc, stats in ocr.items():
+        mean_conf = stats["mean_confidence"]
+        low_pages = stats["low_pages"]
+        if mean_conf < 0.80:
+            st.warning(
+                f"⚠️ **{doc}** is a scanned PDF. "
+                f"Mean OCR confidence: {mean_conf:.0%}. "
+                f"Low-confidence pages: {low_pages or 'none'}. "
+                "Some facts may be mis-read."
+            )
+
+
+# ── Tab: Summary ─────────────────────────────────────────────────────────────
+
+def study_tab_summary():
+    _study_session_state()
+    st.subheader("📝 Topic Summary")
+
+    topics    = st.session_state.study_topics
+    summaries = st.session_state.study_summaries
+    dirs      = st.session_state.study_dirs
+
+    if not topics:
+        st.info("Upload a PDF first (Upload tab).")
+        return
+
+    topic_titles = [t["title"] for t in topics]
+    sel = st.selectbox("Select topic", topic_titles)
+    topic = next(t for t in topics if t["title"] == sel)
+    s     = summaries.get(topic["id"], {})
+
+    st.markdown(f"**Pages {topic['page_start']} – {topic['page_end']}**")
+
+    for b in s.get("bullets", []):
+        col1, col2 = st.columns([10, 1])
+        with col1:
+            st.markdown(f"• {b['text']}")
+        with col2:
+            if st.button("🔍", key=f"src_{b['page']}_{b['text'][:10]}",
+                         help="View source page"):
+                _render_source(
+                    b.get("doc", ""), b.get("page"), b.get("bbox"), dirs
+                )
+
+    if s.get("key_numbers"):
+        st.markdown("#### 🔢 Key Numbers")
+        rows = [{
+            "Value":  n["value"],
+            "Unit":   n["unit"],
+            "Period": n["period"],
+            "Page":   n["page"],
+        } for n in s["key_numbers"]]
+        st.dataframe(rows, use_container_width=True)
+
+
+# ── Tab: Flashcards ──────────────────────────────────────────────────────────
+
+def study_tab_flashcards():
+    _study_session_state()
+    st.subheader("🃏 Flashcards")
+
+    cards = st.session_state.study_cards
+    dirs  = st.session_state.study_dirs
+
+    if not cards:
+        st.info("Upload a PDF first (Upload tab).")
+        return
+
+    topics    = st.session_state.study_topics
+    topic_map = {t["id"]: t["title"] for t in topics}
+
+    # Filters
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        topic_filter = st.selectbox(
+            "Filter by topic",
+            ["All"] + list(topic_map.values()),
+        )
+    with col2:
+        diff_filter = st.selectbox("Difficulty", ["All", "easy", "medium", "hard"])
+    with col3:
+        type_filter = st.selectbox("Type", ["All", "concept", "key_number", "cloze"])
+
+    shuffle = st.toggle("Shuffle", value=False)
+
+    filtered = [c for c in cards
+                if (topic_filter == "All" or topic_map.get(c["topic_id"]) == topic_filter)
+                and (diff_filter == "All" or c.get("difficulty") == diff_filter)
+                and (type_filter == "All" or c.get("type") == type_filter)]
+
+    if shuffle:
+        import random
+        random.shuffle(filtered)
+
+    if not filtered:
+        st.info("No cards match the selected filters.")
+        return
+
+    st.caption(f"{len(filtered)} card(s) shown")
+
+    for card in filtered:
+        with st.container(border=True):
+            col_q, col_flip = st.columns([9, 1])
+            with col_q:
+                st.markdown(f"**{card['front']}**")
+                st.caption(
+                    f"{card.get('type','')} · {card.get('difficulty','')} · "
+                    f"p.{card.get('page','?')}"
+                )
+            with col_flip:
+                flipped = st.session_state.study_flip.get(card["id"], False)
+                if st.button("↩" if flipped else "👁", key=f"flip_{card['id']}"):
+                    st.session_state.study_flip[card["id"]] = not flipped
+                    st.rerun()
+
+            if st.session_state.study_flip.get(card["id"]):
+                st.success(f"**Answer:** {card['back']}")
+                if not card.get("verified"):
+                    st.warning("⚠️ This number could not be verified in the source.")
+
+                deck = st.session_state.study_leitner
+                if deck:
+                    col_k, col_r = st.columns(2)
+                    with col_k:
+                        if st.button("✅ I knew it", key=f"knew_{card['id']}"):
+                            deck.answer(card["id"], True)
+                    with col_r:
+                        if st.button("🔁 Review again", key=f"review_{card['id']}"):
+                            deck.answer(card["id"], False)
+
+                if st.button("📄 Show source", key=f"show_{card['id']}"):
+                    _render_source(
+                        card.get("doc", ""), card.get("page"),
+                        card.get("bbox"), dirs
+                    )
+
+            st.divider()
+
+    # Exports
+    st.markdown("#### 📥 Export")
+    from study.export import to_csv, to_anki_tsv, to_pdf as cards_to_pdf
+    ec1, ec2, ec3 = st.columns(3)
+    with ec1:
+        st.download_button("CSV", to_csv(filtered),
+                           "flashcards.csv", "text/csv")
+    with ec2:
+        st.download_button("Anki TSV", to_anki_tsv(filtered),
+                           "flashcards.tsv", "text/tab-separated-values")
+    with ec3:
+        st.download_button("Print PDF",
+                           cards_to_pdf(filtered, "My Flashcards"),
+                           "flashcards.pdf", "application/pdf")
+
+
+# ── Tab: Quiz ────────────────────────────────────────────────────────────────
+
+def study_tab_quiz():
+    _study_session_state()
+    st.subheader("🧠 Quiz Mode")
+
+    cards = st.session_state.study_cards
+    deck  = st.session_state.study_leitner
+    dirs  = st.session_state.study_dirs
+
+    if not cards or not deck:
+        st.info("Upload a PDF first (Upload tab).")
+        return
+
+    due   = deck.due_cards()
+    score = st.session_state.study_quiz_score
+
+    st.metric("Session score",
+              f"{score['correct']}/{score['total']}",
+              delta=None)
+
+    if st.button("Next question ▶"):
+        import random
+        pool = due if due else cards
+        card = random.choice(pool)
+        st.session_state.study_quiz_q = deck.make_quiz_question(card, cards)
+
+    q = st.session_state.study_quiz_q
+    if not q:
+        st.info("Click 'Next question' to start.")
+        return
+
+    st.markdown(f"### {q['question']}")
+    for choice in q["choices"]:
+        if st.button(choice, key=f"choice_{choice[:30]}"):
+            correct = choice == q["answer"]
+            score["total"] += 1
+            if correct:
+                score["correct"] += 1
+                deck.answer(q["card_id"], True)
+                st.success(f"✅ Correct! **{q['answer']}**")
+            else:
+                deck.answer(q["card_id"], False)
+                st.error(f"❌ Incorrect. Answer: **{q['answer']}**")
+            st.session_state.study_quiz_q = None
+
+            if dirs:
+                _render_source(q.get("doc",""), q.get("page"),
+                               q.get("bbox"), dirs)
+            st.rerun()
+
+
+# ── Tab: Videos ──────────────────────────────────────────────────────────────
+
+def study_tab_videos():
+    _study_session_state()
+    st.subheader("▶️ Recommended Videos")
+
+    topics = st.session_state.study_topics
+    if not topics:
+        st.info("Upload a PDF first (Upload tab).")
+        return
+
+    from study.youtube import recommendations_for_topic, YOUTUBE_API_KEY as _ytkey
+
+    mode_label = "☁️ YouTube API" if _ytkey else "🔗 Search links (no API key)"
+    st.caption(f"Mode: {mode_label} · Recommendations are external and not from your document.")
+
+    for topic in topics:
+        with st.expander(f"🎬 {topic['title']}"):
+            recs = recommendations_for_topic(topic, n=3)
+            for r in recs:
+                st.markdown(f"[{r['title']}]({r['url']})")
+                if r.get("channel"):
+                    st.caption(f"Channel: {r['channel']}")
+            st.caption(recs[0]["note"] if recs else "")
+
+
+# ── Tab: Ask (Q&A over uploaded PDF) ─────────────────────────────────────────
+
+def study_tab_ask():
+    _study_session_state()
+    st.subheader("❓ Ask Your PDF")
+
+    sid  = st.session_state.study_session_id
+    dirs = st.session_state.study_dirs
+
+    if not sid or not dirs:
+        st.info("Upload a PDF first (Upload tab).")
+        return
+
+    q = st.text_input("Ask a question about your uploaded PDF")
+    if not q.strip():
+        return
+
+    if st.button("Ask ▶", type="primary"):
+        from tracerag.engine import Engine
+        session_engine = Engine(str(dirs["index"]), str(dirs["pdfs"]))
+        with st.spinner("Searching your document…"):
+            result = session_engine.answer(f"study_{sid[:8]}", q.strip())
+
+        status = result.get("status", "")
+        answer = result.get("answer", "")
+        docs   = _doc_list(result)
+        pages  = _page_list(result)
+
+        if status == "refuse":
+            st.warning(
+                f"🔴 Not found in your document. "
+                f"Reason: {result.get('reason_codes', ['unknown'])}"
+            )
+        elif status == "conflict":
+            st.warning(f"⚠️ Conflicting values found: **{answer}**")
+        else:
+            st.success(f"**{answer}**")
+
+        if docs and pages:
+            st.caption(f"Source: {docs[0]} p.{pages[0]}")
+            bbox = result.get("bbox")
+            if isinstance(bbox, str):
+                import json as _json
+                try:
+                    bbox = _json.loads(bbox)
+                except Exception:
+                    bbox = None
+            img = render_page_bytes(str(dirs["pdfs"] / docs[0]), pages[0], bbox)
+            if img:
+                st.image(img, use_container_width=True)
+
+        receipt = result.get("audit_receipt", "")
+        if receipt:
+            st.caption(f"Receipt: `{receipt}`")
+
+
+# ── Tab: Progress ────────────────────────────────────────────────────────────
+
+def study_tab_progress():
+    _study_session_state()
+    st.subheader("📈 Study Progress")
+
+    deck   = st.session_state.study_leitner
+    topics = st.session_state.study_topics
+
+    if not deck:
+        st.info("Upload a PDF first (Upload tab).")
+        return
+
+    prog = deck.progress()
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total cards",   prog["total"])
+    col2.metric("Graduated",     prog["graduated"])
+    col3.metric("% Graduated",   f"{prog['pct_graduated']}%")
+
+    st.markdown("#### Cards per Leitner Box")
+    box_df = [{"Box": f"Box {b}", "Cards": n}
+              for b, n in prog["by_box"].items()]
+    st.bar_chart({row["Box"]: row["Cards"] for row in box_df})
+
+    st.markdown("#### By Topic")
+    topic_prog = deck.topic_progress()
+    topic_map  = {t["id"]: t["title"] for t in topics}
+    rows = []
+    for tid, tp in topic_prog.items():
+        rows.append({
+            "Topic":      topic_map.get(tid, tid),
+            "Cards":      tp["cards"],
+            "Mean Box":   tp["mean_box"],
+            "Graduated":  tp["graduated"],
+        })
+    if rows:
+        import pandas as pd
+        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+    score = st.session_state.study_quiz_score
+    st.markdown("#### Quiz Score")
+    total = score["total"]
+    if total:
+        pct = round(score["correct"] / total * 100, 1)
+        st.metric("Correct", f"{score['correct']}/{total}",
+                  delta=f"{pct}%")
+    else:
+        st.info("No quiz attempts yet.")
+
+    if st.button("🔄 Advance session (new study round)"):
+        deck.advance_session()
+        st.success(f"Session {deck.session} started.")
 
 
 if __name__ == "__main__":
