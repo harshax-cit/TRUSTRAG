@@ -1,0 +1,112 @@
+{
+  "annexure_scanned.pdf": {
+    "doc": "annexure_scanned.pdf",
+    "sha256": "39711c2bb1193298f1ae2bcfa15121c6751917ae87b4aee1ee02585b1747b579",
+    "pages": 20,
+    "text_pages": 0,
+    "scan_pages": 20,
+    "table_pages": 0,
+    "chart_pages": 0,
+    "fact_count": 1390,
+    "region_count": 20
+  },
+  "cag_report08_vivad_se_vishwas_p1-150.pdf": {
+    "doc": "cag_report08_vivad_se_vishwas_p1-150.pdf",
+    "sha256": "5fd158addb6aa1c4e4994265f6e6f95f31cfa2f0bd1417816373849332310f52",
+    "pages": 150,
+    "text_pages": 141,
+    "scan_pages": 9,
+    "table_pages": 61,
+    "chart_pages": 2,
+    "fact_count": 7678,
+    "region_count": 1289
+  },
+  "cag_report32_unexplained_transactions.pdf": {
+    "doc": "cag_report32_unexplained_transactions.pdf",
+    "sha256": "ec9a6d31fa0d606863fefbde79633744065cbbc146b96625fb8d39b1630fe489",
+    "pages": 140,
+    "text_pages": 125,
+    "scan_pages": 15,
+    "table_pages": 77,
+    "chart_pages": 0,
+    "fact_count": 5263,
+    "region_count": 1265
+  },
+  "cag_sikkim_state_finances_2024-25.pdf": {
+    "doc": "cag_sikkim_state_finances_2024-25.pdf",
+    "sha256": "bab0baff7adecc7d096501c3fb06bf263bae7c0f225aa05d112dc3d290613afc",
+    "pages": 147,
+    "text_pages": 131,
+    "scan_pages": 16,
+    "table_pages": 93,
+    "chart_pages": 2,
+    "fact_count": 11168,
+    "region_count": 1908
+  },
+  "es2023-24_money_prices.pdf": {
+    "doc": "es2023-24_money_prices.pdf",
+    "sha256": "7ec1e4a64bebff357dc36627122fb2e78ed0b01fb2e427f04ae6b7a56110d7a9",
+    "pages": 66,
+    "text_pages": 64,
+    "scan_pages": 2,
+    "table_pages": 5,
+    "chart_pages": 3,
+    "fact_count": 2018,
+    "region_count": 1570
+  },
+  "es2023-24_state_economy_external.pdf": {
+    "doc": "es2023-24_state_economy_external.pdf",
+    "sha256": "a30868e574a987e587add56388facef994f66a3526f8e2a21a3eccaba21ef1a0",
+    "pages": 88,
+    "text_pages": 87,
+    "scan_pages": 1,
+    "table_pages": 8,
+    "chart_pages": 1,
+    "fact_count": 3082,
+    "region_count": 2936
+  },
+  "es2024-25_money_prices_ORGANIZER-MODIFIED.pdf": {
+    "doc": "es2024-25_money_prices_ORGANIZER-MODIFIED.pdf",
+    "sha256": "88077e1f41aa93325c551271480eeb586b62dc5f6105410c893863c44d905fe4",
+    "pages": 60,
+    "text_pages": 59,
+    "scan_pages": 1,
+    "table_pages": 3,
+    "chart_pages": 3,
+    "fact_count": 1869,
+    "region_count": 1327
+  },
+  "es2024-25_state_economy_external.pdf": {
+    "doc": "es2024-25_state_economy_external.pdf",
+    "sha256": "015c63cb7d61961c4cc630b94d8afc625a676dcf1a7f09331f599d75a17ee3e5",
+    "pages": 72,
+    "text_pages": 71,
+    "scan_pages": 1,
+    "table_pages": 1,
+    "chart_pages": 1,
+    "fact_count": 2188,
+    "region_count": 2364
+  },
+  "kerala_budget_in_brief_2026-27.pdf": {
+    "doc": "kerala_budget_in_brief_2026-27.pdf",
+    "sha256": "1019cab4197c004ef27cec0efc7caaee9be6acaeba0a70c1110f285619a7208f",
+    "pages": 138,
+    "text_pages": 126,
+    "scan_pages": 12,
+    "table_pages": 80,
+    "chart_pages": 3,
+    "fact_count": 23245,
+    "region_count": 3178
+  },
+  "kerala_budget_speech_2026-27.pdf": {
+    "doc": "kerala_budget_speech_2026-27.pdf",
+    "sha256": "6886c2cff82d3bf9f50f4af693a1921473d2aa9c2d7274c505d560d21b44feaa",
+    "pages": 139,
+    "text_pages": 133,
+    "scan_pages": 6,
+    "table_pages": 4,
+    "chart_pages": 0,
+    "fact_count": 1361,
+    "region_count": 3659
+  }
+}
