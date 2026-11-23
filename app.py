@@ -1,14 +1,12 @@
 """
 app.py – TraceRAG Streamlit UI
 
-Five lenses (tabs):
-  1. Analyst    – highlighted page, side-by-side conflict, revision timeline, CSV export
-  2. Journalist – safe-to-publish badge, copyable citation with receipt ID
-  3. Student    – plain-language explanation, glossary, suggested follow-ups
-  4. Fact-checker – paste a claim → Supported / Contradicted / Not in collection
-  5. Auditor    – chain integrity badge, refusal ledger, decision mix, tamper demo
+Role-based hybrid deployment:
+  Government (GOVERNMENT_MODE=offline) → offline dashboard, local only
+  All other roles                      → online dashboard
 
-Answer, page, bbox and status are identical in every lens.
+Five original lenses + 7 Study Mode tabs are preserved unchanged.
+Login screen routes each role to its authorised tabs.
 """
 
 from __future__ import annotations
@@ -26,12 +24,20 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 
-# ── paths ────────────────────────────────────────────────────────────────────
-ROOT       = Path(__file__).parent
-INDEX_DIR  = ROOT / "data" / "index"
-PDF_DIR    = ROOT / "data" / "raw" / "pdfs"
-QUESTIONS  = ROOT / "data" / "raw" / "practice_questions.jsonl"
-ANSWERS    = ROOT / "data" / "raw" / "practice_answers.jsonl"
+# ── config & auth (imported first so government guard activates early) ────────
+from config import (
+    is_government_mode, get_mode_label, get_ai_label,
+    index_dir as _cfg_index_dir, pdf_dir as _cfg_pdf_dir,
+    ROLE_TABS, GovernmentModeViolation,
+)
+from auth import authenticate, get_role_info, is_authorised, AuthError
+
+# ── paths (environment-aware) ─────────────────────────────────────────────────
+ROOT      = Path(__file__).parent
+INDEX_DIR = Path(_cfg_index_dir())
+PDF_DIR   = Path(_cfg_pdf_dir())
+QUESTIONS = ROOT / "data" / "raw" / "practice_questions.jsonl"
+ANSWERS   = ROOT / "data" / "raw" / "practice_answers.jsonl"
 
 # ── lazy imports ─────────────────────────────────────────────────────────────
 @st.cache_resource
@@ -46,7 +52,10 @@ def get_audit():
 
 def db_conn():
     """Thread-safe SQLite connection."""
-    return sqlite3.connect(str(INDEX_DIR / "facts.db"), check_same_thread=False)
+    db = INDEX_DIR / "facts.db"
+    if not db.exists():
+        return None
+    return sqlite3.connect(str(db), check_same_thread=False)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -107,15 +116,34 @@ def sidebar():
     st.sidebar.title("TraceRAG")
     st.sidebar.caption("Multimodal RAG with Explainability")
 
-    # Online / offline indicator
-    from tracerag.llm import is_online
-    mode = "☁️ Cloud LLM active" if is_online() else "💻 Offline (local only)"
-    st.sidebar.info(mode)
+    # ── Environment indicator ─────────────────────────────────────────────────
+    if is_government_mode():
+        st.sidebar.error(
+            "🔒 **OFFLINE — Government Secure Environment**\n\n"
+            "All processing is local. No external API calls."
+        )
+    else:
+        from tracerag.llm import is_online as _llm_online
+        ai_label = get_ai_label()
+        st.sidebar.info(f"{get_mode_label()}\n\n{ai_label}")
+
+    # ── Logged-in user info ───────────────────────────────────────────────────
+    user = st.session_state.get("user")
+    if user:
+        role_info = get_role_info(user["role"])
+        st.sidebar.success(
+            f"{role_info['icon']} **{user['name']}**\n\n"
+            f"Role: {role_info['label']}"
+        )
+        if st.sidebar.button("Logout", use_container_width=True):
+            for k in list(st.session_state.keys()):
+                del st.session_state[k]
+            st.rerun()
 
     # Quick question selector
     questions = load_jsonl(QUESTIONS)
-    options = ["— custom question —"] + [q["question"][:80] for q in questions]
-    sel = st.sidebar.selectbox("Practice questions", options)
+    options   = ["— custom question —"] + [q["question"][:80] for q in questions]
+    sel    = st.sidebar.selectbox("Practice questions", options)
     custom = st.sidebar.text_area("Or type your question", height=90)
 
     if sel != "— custom question —":
@@ -123,7 +151,7 @@ def sidebar():
     else:
         q_text = custom.strip()
 
-    run = st.sidebar.button("Ask ▶", type="primary", use_container_width=True)
+    run    = st.sidebar.button("Ask ▶", type="primary", use_container_width=True)
     strict = st.sidebar.toggle("Strict mode (6-field output)")
     return q_text, run, strict
 
@@ -553,6 +581,26 @@ def main():
         initial_sidebar_state="expanded",
     )
 
+    # ── Login gate ────────────────────────────────────────────────────────────
+    if not st.session_state.get("user"):
+        _show_login()
+        return
+
+    user = st.session_state["user"]
+    role = user["role"]
+
+    # Backend authorization re-check on every render
+    if role == "government" and not is_government_mode():
+        st.error("Session invalid: government role requires offline mode.")
+        del st.session_state["user"]
+        st.rerun()
+        return
+    if role != "government" and is_government_mode():
+        st.error("Session invalid: only government role permitted in offline mode.")
+        del st.session_state["user"]
+        st.rerun()
+        return
+
     q_text, run, strict = sidebar()
 
     # Persistent result in session state
@@ -569,66 +617,137 @@ def main():
     result   = st.session_state.result
     question = st.session_state.question
 
-    # Tabs
-    tabs = st.tabs([
-        "📊 Analyst",
-        "📰 Journalist",
-        "🎓 Student",
-        "🔍 Fact-checker",
-        "🔐 Auditor",
-        "📤 Upload",
-        "📝 Summary",
-        "🃏 Flashcards",
-        "🧠 Quiz",
-        "▶️ Videos",
-        "❓ Ask",
-        "📈 Progress",
-    ])
+    # ── Allowed tabs for this role ────────────────────────────────────────────
+    allowed = ROLE_TABS.get(role, [])
 
-    with tabs[0]:
-        if result:
-            lens_analyst(result, question)
+    # ── Government dashboard ──────────────────────────────────────────────────
+    if role == "government":
+        _government_dashboard(result, question, allowed, strict)
+        return
+
+    # ── Online dashboard (all other roles) ───────────────────────────────────
+    _online_dashboard(result, question, role, allowed, strict)
+
+
+# ── Login screen ─────────────────────────────────────────────────────────────
+
+def _show_login():
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.title("🔐 TraceRAG Login")
+
+        env = get_mode_label()
+        if is_government_mode():
+            st.error(f"**{env}**")
+            st.caption("Government offline mode active. Only government accounts permitted.")
         else:
-            st.info("Ask a question using the sidebar to get started.")
+            st.info(f"**{env}**")
 
-    with tabs[1]:
-        if result:
-            lens_journalist(result, question)
-        else:
-            st.info("Ask a question using the sidebar to get started.")
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Login", use_container_width=True)
 
-    with tabs[2]:
-        if result:
-            lens_student(result, question)
-        else:
-            st.info("Ask a question using the sidebar to get started.")
+        if submitted:
+            try:
+                user = authenticate(username, password)
+                st.session_state["user"] = user
+                st.success(f"Welcome, {user['name']}!")
+                st.rerun()
+            except AuthError as e:
+                st.error(str(e))
 
-    with tabs[3]:
-        lens_factchecker()
+        # Show available accounts for this environment (demo only)
+        with st.expander("Demo accounts"):
+            if is_government_mode():
+                st.markdown("| Username | Password | Role |\n|---|---|---|\n"
+                            "| `government` | `gov-secure-2024` | Government |")
+            else:
+                st.markdown(
+                    "| Username | Password | Role |\n|---|---|---|\n"
+                    "| `analyst` | `analyst-pass` | Policy Analyst |\n"
+                    "| `journalist` | `press-pass` | Journalist |\n"
+                    "| `student` | `learn-2024` | Student |\n"
+                    "| `checker` | `verify-pass` | Fact-Checker |\n"
+                    "| `auditor` | `audit-admin` | Auditor / Admin |"
+                )
 
-    with tabs[4]:
-        lens_auditor()
 
-    with tabs[5]:
-        study_tab_upload()
+# ── Government offline dashboard ─────────────────────────────────────────────
 
-    with tabs[6]:
-        study_tab_summary()
+def _government_dashboard(result, question, allowed, strict):
+    """
+    Government users get a dedicated offline dashboard.
+    Student study tabs disabled (no external uploads in gov mode).
+    Local model status and DB status shown prominently.
+    """
+    # Status bar
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Environment", "🔒 Offline")
+    col2.metric("AI Provider", "Local")
+    col3.metric("Database",    "Local SQLite")
 
-    with tabs[7]:
-        study_tab_flashcards()
+    # Audit chain status
+    try:
+        from tracerag.audit import AuditLog
+        audit  = AuditLog(str(INDEX_DIR))
+        ok, _  = audit.verify_chain()
+        col4.metric("Audit Chain", "✅ Intact" if ok else "❌ Broken")
+    except Exception:
+        col4.metric("Audit Chain", "⚠️ Unavailable")
 
-    with tabs[8]:
-        study_tab_quiz()
+    st.divider()
 
-    with tabs[9]:
-        study_tab_videos()
+    # Only show allowed tabs for government role
+    tab_names = [t for t in ["📊 Analyst", "🔍 Fact-checker", "🔐 Auditor"]
+                 if t in allowed]
+    if not tab_names:
+        st.warning("No tabs authorised for this role.")
+        return
 
-    with tabs[10]:
-        study_tab_ask()
+    tabs = st.tabs(tab_names)
+    for tab, name in zip(tabs, tab_names):
+        with tab:
+            if name == "📊 Analyst":
+                if result:
+                    lens_analyst(result, question)
+                else:
+                    st.info("Ask a question using the sidebar.")
+            elif name == "🔍 Fact-checker":
+                lens_factchecker()
+            elif name == "🔐 Auditor":
+                lens_auditor()
 
-    with tabs[11]:
-        study_tab_progress()
+
+# ── Online dashboard (all non-government roles) ───────────────────────────────
+
+def _online_dashboard(result, question, role, allowed, strict):
+    # All tabs mapped by name
+    all_tab_defs = {
+        "📊 Analyst":    lambda: lens_analyst(result, question) if result else st.info("Ask a question."),
+        "📰 Journalist": lambda: lens_journalist(result, question) if result else st.info("Ask a question."),
+        "🎓 Student":    lambda: lens_student(result, question) if result else st.info("Ask a question."),
+        "🔍 Fact-checker": lens_factchecker,
+        "🔐 Auditor":    lens_auditor,
+        "📤 Upload":     study_tab_upload,
+        "📝 Summary":    study_tab_summary,
+        "🃏 Flashcards": study_tab_flashcards,
+        "🧠 Quiz":       study_tab_quiz,
+        "▶️ Videos":     study_tab_videos,
+        "❓ Ask":        study_tab_ask,
+        "📈 Progress":   study_tab_progress,
+    }
+
+    tab_names = [t for t in allowed if t in all_tab_defs]
+    if not tab_names:
+        st.warning("No tabs authorised for this role.")
+        return
+
+    tabs = st.tabs(tab_names)
+    for tab, name in zip(tabs, tab_names):
+        with tab:
+            fn = all_tab_defs[name]
+            fn()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

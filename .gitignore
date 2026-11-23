@@ -16,6 +16,7 @@ env/
 
 # Data – raw PDFs and large index files
 data/raw/pdfs/
+data/sessions/
 data/raw/.cache/
 data/index/facts.db
 data/index/regions.jsonl

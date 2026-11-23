@@ -31,8 +31,24 @@ def recommendations_for_topic(
 ) -> list[dict]:
     """
     Return n video recommendations for a topic.
-    Each dict has: title, url, channel, mode, query.
+    Blocked entirely in government mode (no external calls).
     """
+    # Government mode: no external calls allowed
+    try:
+        from config import is_government_mode
+        if is_government_mode():
+            return [{
+                "title":   "YouTube recommendations disabled in Government offline mode.",
+                "url":     "#",
+                "channel": "",
+                "duration":"",
+                "mode":    "blocked",
+                "query":   "",
+                "note":    "External network access is blocked in Government mode.",
+            }]
+    except ImportError:
+        pass
+
     query = _build_query(topic)
     if not query:
         return []

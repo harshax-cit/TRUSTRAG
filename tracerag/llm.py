@@ -29,6 +29,16 @@ def _detect_mode() -> Optional[str]:
     global _API_MODE
     if _API_MODE is not None:
         return _API_MODE
+
+    # Government mode: external AI is ALWAYS blocked — no silent fallback
+    try:
+        from config import is_government_mode
+        if is_government_mode():
+            _API_MODE = None
+            return None
+    except ImportError:
+        pass
+
     if os.environ.get("OPENAI_API_KEY"):
         _API_MODE = "openai"
     elif os.environ.get("ANTHROPIC_API_KEY"):
