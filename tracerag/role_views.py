@@ -31,9 +31,10 @@ from .engine import Engine
 from .highlight import render_page_with_highlight
 from .ingest import build_index, load_manifest, _file_sha256
 from .ui import (
-    apply_enterprise_theme, render_top_navbar, render_page_header,
-    stat_row, evidence_box, empty_state, offline_banner,
-    status_badge_html, render_dashboard_metrics, COLORS,
+    apply_enterprise_theme, render_sidebar, render_topbar,
+    render_top_navbar, render_page_header, page_header,
+    stat_row, evidence_box, empty_state, status_badge,
+    render_dashboard_metrics, COLORS, ROLE_NAME_MAP,
 )
 from .verify import Verifier
 
@@ -161,18 +162,11 @@ def _master_shell(user: dict, nav_key: str, page_title: str) -> str:
     """
     Render brand + nav + user in sidebar, topbar in main area.
     Returns the selected page name.
+    Uses ui.render_sidebar and ui.render_topbar — same for all roles.
     """
     apply_enterprise_theme()
-    role   = user.get("role", "analyst")
-    is_gov = role == "government"
-
-    # Sidebar
-    _render_sidebar_brand()
-    page = _render_sidebar_nav(role, nav_key)
-    _render_sidebar_user(user)
-
-    # Top bar
-    render_top_navbar(user, page_title=page)
+    page = render_sidebar(user, nav_key)
+    render_topbar(user, page)
     return page
 
 
@@ -342,7 +336,7 @@ def _page_ask_question(user: dict, idx_dir: Path, pdf_dir: Path) -> None:
 
         # Answer card
         st.markdown("<div style='height:0.75rem;'></div>", unsafe_allow_html=True)
-        badge = status_badge_html(status)
+        badge = status_badge(status)
 
         if status == "refuse":
             st.warning(

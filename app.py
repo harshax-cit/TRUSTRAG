@@ -1265,8 +1265,8 @@ def view_help_and_support(user, is_gov):
 
 def main():
     st.set_page_config(
-        page_title="TraceRAG",
-        page_icon="🌿",
+        page_title="TraceRAG | Evidence Intelligence",
+        page_icon="🔎",
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -1279,9 +1279,44 @@ def main():
         if nav_key not in st.session_state:
             st.session_state[nav_key] = None
 
-    # Login gate
+    # Login gate — uses ui.render_login with callback
     if not st.session_state.get("user"):
-        _show_login()
+        from tracerag.ui import render_login
+        def _handle_auth(username, password, mode="login", **kwargs):
+            if not username or not password:
+                st.warning("Enter both username and password.")
+                return
+            if mode == "login":
+                try:
+                    user = authenticate(username.strip(), password)
+                    st.session_state["user"] = user
+                    ri = get_role_info(user["role"])
+                    st.success(f"{ri['icon']} Welcome **{user['name']}**!")
+                    time.sleep(0.5)
+                    st.rerun()
+                except AuthError as e:
+                    st.error(str(e))
+            else:  # register
+                # Map display name back to internal role key
+                role_map = {
+                    "Student":       "student",
+                    "Policy Analyst":"analyst",
+                    "Journalist":    "journalist",
+                    "Fact-Checker":  "factchecker",
+                }
+                internal_role = role_map.get(kwargs.get("role","Student"), "student")
+                try:
+                    from auth import create_account
+                    user = create_account(username.strip(), password,
+                                         kwargs.get("name",""), internal_role)
+                    st.session_state["user"] = user
+                    st.success(f"Account created! Welcome **{user['name']}**.")
+                    time.sleep(0.5)
+                    st.rerun()
+                except AuthError as e:
+                    st.error(str(e))
+
+        render_login(on_login=_handle_auth)
         return
 
     user   = st.session_state["user"]
@@ -1291,7 +1326,6 @@ def main():
     _idx_dir = ROOT / "data" / "gov_index" if is_gov else ROOT / "data" / "index"
     _pdf_dir = ROOT / "data" / "gov_pdfs"  if is_gov else ROOT / "data" / "raw" / "pdfs"
 
-    # Route to role dashboard
     dispatch = {
         "government":  lambda: render_government_interface(user, _idx_dir, _pdf_dir),
         "analyst":     lambda: render_analyst_interface(user, _idx_dir, _pdf_dir),
@@ -1305,81 +1339,6 @@ def main():
         fn()
     else:
         st.error(f"Unknown role: {role}")
-
-
-# ── Unified login screen ──────────────────────────────────────────────────────
-
-def _show_login():
-    """Single login page for all six roles."""
-    # centre column
-    _, col, _ = st.columns([1, 1, 1])
-    with col:
-        st.markdown("""
-        <div style="text-align:center;padding:2rem 0 1.5rem;">
-            <div style="font-size:2.5rem;line-height:1;margin-bottom:0.5rem;">🌿</div>
-            <h1 style="font-size:1.75rem;font-weight:800;color:#0f2318;margin:0 0 0.3rem;">TraceRAG</h1>
-            <p style="color:#6b7280;font-size:0.9rem;margin:0;">
-                Enterprise Multimodal Evidence-Intelligence Platform
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        tab_in, tab_reg = st.tabs(["🔐 Sign In", "📝 Create Account"])
-
-        # ── Sign in ───────────────────────────────────────────────────────────
-        with tab_in:
-            with st.form("login_form"):
-                username = st.text_input("Username", placeholder="your-username")
-                password = st.text_input("Password", type="password",
-                                          placeholder="your-password")
-                btn = st.form_submit_button("Sign in →", type="primary",
-                                             use_container_width=True)
-            if btn:
-                if not username or not password:
-                    st.warning("Enter both username and password.")
-                else:
-                    try:
-                        user = authenticate(username, password)
-                        st.session_state["user"] = user
-                        env = "🔒 Government Offline" if user.get("offline") else "🌐 Online"
-                        ri  = get_role_info(user["role"])
-                        st.success(f"{ri['icon']} Welcome **{user['name']}** — {env}")
-                        time.sleep(0.6)
-                        st.rerun()
-                    except AuthError as e:
-                        st.error(str(e))
-
-        # ── Create account ────────────────────────────────────────────────────
-        with tab_reg:
-            st.info("🔒 Government and Auditor accounts require administrator provisioning.")
-            with st.form("register_form"):
-                rn = st.text_input("Full Name",  placeholder="Your Name")
-                ru = st.text_input("Username",   placeholder="choose-a-username")
-                rp = st.text_input("Password",   type="password",
-                                    placeholder="at least 6 characters")
-                rp2= st.text_input("Confirm Password", type="password")
-                rr = st.selectbox("Role", ["student","analyst","journalist","factchecker"],
-                                   format_func=lambda r: {
-                                       "student":    "🎓 Student",
-                                       "analyst":    "📊 Policy Analyst",
-                                       "journalist": "📰 Journalist",
-                                       "factchecker":"🔍 Fact-Checker",
-                                   }.get(r, r))
-                rbtn = st.form_submit_button("Create Account →", type="primary",
-                                              use_container_width=True)
-            if rbtn:
-                if rp != rp2:
-                    st.error("Passwords do not match.")
-                else:
-                    try:
-                        from auth import create_account
-                        user = create_account(ru, rp, rn, rr)
-                        st.session_state["user"] = user
-                        st.success(f"✅ Account created! Welcome **{user['name']}**.")
-                        time.sleep(0.6)
-                        st.rerun()
-                    except AuthError as e:
-                        st.error(str(e))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
