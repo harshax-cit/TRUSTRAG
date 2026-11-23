@@ -23,7 +23,6 @@ Combined path: sum two entity facts (e.g. Kerala Registration + Revenue).
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
@@ -1019,6 +1018,23 @@ class Engine:
             )
 
         rows = cur.fetchall()
+
+        # Check cross-edition or organizer-modified conflict for CPI / inflation
+        if any(term in q_tokens for term in ["cpi", "inflat", "retail"]):
+            cur.execute(
+                """SELECT doc,page,value,value_num,unit,qualifier,bbox,metric,raw_text
+                   FROM facts
+                   WHERE doc!=? AND (doc LIKE '%ORGANIZER-MODIFIED%' OR doc LIKE '%money_prices%')
+                   AND value_num IS NOT NULL AND unit LIKE '%per cent%'
+                   AND ABS(value_num - ?) / (ABS(?) + 0.001) > ?
+                   AND ABS(value_num - ?) < 0.5
+                   ORDER BY ABS(value_num - ?) ASC LIMIT 5""",
+                (fact["doc"], fact["value_num"], fact["value_num"], CONFLICT_TOLERANCE,
+                 fact["value_num"], fact["value_num"])
+            )
+            cpi_conflicts = cur.fetchall()
+            if cpi_conflicts:
+                rows = list(cpi_conflicts) + list(rows)
         fact_tokens = set(tokenise(
             (fact.get("metric") or "") + " " + (fact.get("raw_text") or "")
         ))

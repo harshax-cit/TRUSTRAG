@@ -1,0 +1,58 @@
+name: TraceRAG CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Tesseract
+        run: sudo apt-get install -y tesseract-ocr
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint (unused imports + basic errors)
+        run: |
+          pip install ruff -q
+          ruff check tracerag/ study/ config.py auth.py run.py eval.py \
+            --select F401,F811,E711,E712
+
+      - name: Compile check
+        run: |
+          python -m py_compile tracerag/engine.py tracerag/ingest.py \
+            tracerag/audit.py tracerag/verify.py tracerag/role_views.py \
+            tracerag/system_status.py tracerag/docstore.py \
+            study/ai_generate.py study/flashcards.py \
+            auth.py config.py app.py
+
+      - name: Run offline tests
+        env:
+          GOVERNMENT_MODE: offline
+          AI_PROVIDER: local
+          EXTERNAL_API_ENABLED: "false"
+          AUDIT_HMAC_KEY: ci-test-key
+        run: |
+          python -m pytest tests/test_offline_full.py tests/test_roles.py \
+            tests/test_regressions.py -q --tb=short
+
+      - name: Run online tests (no API keys)
+        env:
+          GOVERNMENT_MODE: "false"
+          AI_PROVIDER: cloud
+          EXTERNAL_API_ENABLED: "true"
+          AUDIT_HMAC_KEY: ci-test-key
+        run: |
+          python -m pytest tests/test_app.py tests/test_regressions.py \
+            -q --tb=short

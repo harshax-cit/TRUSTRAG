@@ -18,11 +18,23 @@ import sqlite3
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 import streamlit as st
+
+from tracerag.educational import generate_student_materials, summarize_document
+from tracerag.role_views import (
+    render_government_interface,
+    render_analyst_interface,
+    render_journalist_interface,
+    render_student_dashboard,
+    render_factchecker_interface,
+    render_auditor_dashboard,
+)
+from tracerag.system_status import render_system_status_page
 
 # ── config & auth (imported first so government guard activates early) ────────
 from config import (
@@ -169,13 +181,31 @@ def sidebar():
             f"{role_info['icon']} **{user['name']}**\n\n"
             f"Role: {role_info['label']}"
         )
-        if st.sidebar.button("Logout", use_container_width=True):
+        if st.sidebar.button("Logout", width="stretch"):
             for k in list(st.session_state.keys()):
                 del st.session_state[k]
             st.rerun()
 
     st.sidebar.markdown("<hr style='border-color:#1c4532; margin:0.6rem 0;' />", unsafe_allow_html=True)
     st.sidebar.markdown("<div style='font-size:0.8rem; font-weight:600; color:#cbd5e1; margin-bottom:0.4rem;'>QUICK QUERY</div>", unsafe_allow_html=True)
+
+    # ── Dev mode toggle (online users only, doesn't touch audit chain) ────────
+    _user = st.session_state.get("user", {})
+    if _user and not _user.get("offline", False):
+        with st.sidebar.expander("🔧 Dev Options", expanded=False):
+            st.caption("Toggles API access for this session only. Audit chain is never modified.")
+            _force_off = st.toggle(
+                "Block all external APIs",
+                value=(os.environ.get("EXTERNAL_API_ENABLED","true").lower() == "false"),
+                key="dev_force_offline",
+            )
+            if _force_off:
+                os.environ["EXTERNAL_API_ENABLED"] = "false"
+                os.environ["AI_PROVIDER"] = "local"
+                st.caption("🔒 External APIs blocked for this session.")
+            else:
+                os.environ["EXTERNAL_API_ENABLED"] = "true"
+                os.environ["AI_PROVIDER"] = os.environ.get("AI_PROVIDER", "cloud")
 
     # Quick question selector (must be first selectbox for test_app.py)
     questions = load_jsonl(QUESTIONS)
@@ -188,7 +218,7 @@ def sidebar():
     else:
         q_text = custom.strip()
 
-    run    = st.sidebar.button("Ask ▶", type="primary", use_container_width=True)
+    run    = st.sidebar.button("Ask ▶", type="primary", width="stretch")
     strict = st.sidebar.toggle("Strict mode (6-field output)")
     return q_text, run, strict
 
@@ -228,7 +258,7 @@ def lens_analyst(result: dict, question: str):
                     img = render_page_bytes(v.get("doc",""), pg or 1,
                                             v.get("bbox"))
                     if img:
-                        st.image(img, use_container_width=True)
+                        st.image(img, width="stretch")
 
         # Revision timeline
         st.markdown("#### 📅 Revision Timeline")
@@ -243,7 +273,7 @@ def lens_analyst(result: dict, question: str):
                 yr = "".join(c for c in d if c.isdigit())[:4] or str(2023 + i)
                 timeline_rows.append({"Document": d, "Page": p,
                                        "Value": a, "Year": yr})
-            st.dataframe(pd.DataFrame(timeline_rows), use_container_width=True)
+            st.dataframe(pd.DataFrame(timeline_rows), width="stretch")
         return
 
     # ── normal answer ────────────────────────────────────────────────────────
@@ -262,7 +292,7 @@ def lens_analyst(result: dict, question: str):
         st.markdown(f"**Source:** `{docs[0]}` — Page **{pages[0]}**")
         img = render_page_bytes(docs[0], pages[0], bbox)
         if img:
-            st.image(img, caption=f"Page {pages[0]} (highlighted)", use_container_width=True)
+            st.image(img, caption=f"Page {pages[0]} (highlighted)", width="stretch")
 
     # Evidence
     ev = result.get("evidence", "")
@@ -339,7 +369,7 @@ def lens_journalist(result: dict, question: str):
         img = render_page_bytes(docs[0], pages[0], bbox)
         if img:
             with st.expander("Source page"):
-                st.image(img, use_container_width=True)
+                st.image(img, width="stretch")
 
     st.caption(f"Receipt ID: `{receipt}`")
 
@@ -453,7 +483,7 @@ def lens_factchecker():
 
     claim = st.text_area("Claim to check", height=80,
                           placeholder="e.g. India's retail inflation was 6% in FY24")
-    check = st.button("Check claim ✔", use_container_width=True)
+    check = st.button("Check claim ✔", width="stretch")
 
     if not check or not claim.strip():
         return
@@ -520,7 +550,7 @@ def lens_factchecker():
         img = render_page_bytes(docs[0], pages[0], bbox)
         if img:
             with st.expander("Source page"):
-                st.image(img, use_container_width=True)
+                st.image(img, width="stretch")
 
     st.caption(f"Receipt: {result.get('audit_receipt','N/A')}")
 
@@ -566,7 +596,7 @@ def lens_auditor():
                 "Reason": r.get("reason",""),
                 "Time": r.get("ts","")[:19],
             } for r in ledger])
-            st.dataframe(df_ledger, use_container_width=True)
+            st.dataframe(df_ledger, width="stretch")
         else:
             st.info("No refusals logged yet.")
 
@@ -673,7 +703,7 @@ def view_home(user, result, question, allowed, idx_dir, pdf_dir, is_gov):
             """,
             unsafe_allow_html=True,
         )
-        if st.button("Go to Uploads →", key="btn_qa_upload", use_container_width=True,
+        if st.button("Go to Uploads →", key="btn_qa_upload", width='stretch',
                      on_click=lambda: st.session_state.update({"enterprise_nav": "📁 My Documents"})):
             pass
 
@@ -688,7 +718,7 @@ def view_home(user, result, question, allowed, idx_dir, pdf_dir, is_gov):
             """,
             unsafe_allow_html=True,
         )
-        if st.button("Open Q&A →", key="btn_qa_ask", use_container_width=True,
+        if st.button("Open Q&A →", key="btn_qa_ask", width="stretch",
                      on_click=lambda: st.session_state.update({"enterprise_nav": "❓ Ask a Question"})):
             pass
 
@@ -703,7 +733,7 @@ def view_home(user, result, question, allowed, idx_dir, pdf_dir, is_gov):
             """,
             unsafe_allow_html=True,
         )
-        if st.button("View Reports →", key="btn_qa_reports", use_container_width=True,
+        if st.button("View Reports →", key="btn_qa_reports", width="stretch",
                      on_click=lambda: st.session_state.update({"enterprise_nav": "📊 Reports & Comparisons"})):
             pass
 
@@ -718,7 +748,7 @@ def view_home(user, result, question, allowed, idx_dir, pdf_dir, is_gov):
             """,
             unsafe_allow_html=True,
         )
-        if st.button("Explore Evidence →", key="btn_qa_explore", use_container_width=True,
+        if st.button("Explore Evidence →", key="btn_qa_explore", width="stretch",
                      on_click=lambda: st.session_state.update({"enterprise_nav": "🔍 Evidence Explorer"})):
             pass
 
@@ -734,7 +764,7 @@ def view_home(user, result, question, allowed, idx_dir, pdf_dir, is_gov):
             "Status": f"✅ {d['status'].capitalize()}",
             "Uploaded": d["upload_time"][:16].replace("T", " "),
         } for d in user_docs[:5]])
-        st.dataframe(df_docs, use_container_width=True, hide_index=True)
+        st.dataframe(df_docs, width="stretch", hide_index=True)
     else:
         st.info("No user-uploaded documents yet. Upload your first document via 'My Documents'.")
 
@@ -756,7 +786,7 @@ def view_ask_question(user, result, question, allowed, idx_dir, pdf_dir, is_gov)
         q_input = st.text_input("Enter your question", value=question, placeholder="e.g. What was India's retail inflation in FY24?", key="main_q_input")
     with col_btn:
         st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
-        search_click = st.button("Search & Verify", type="primary", use_container_width=True)
+        search_click = st.button("Search & Verify", type="primary", width="stretch")
 
     if search_click and q_input:
         with st.spinner("Searching and verifying against original sources…"):
@@ -812,7 +842,7 @@ def view_ask_question(user, result, question, allowed, idx_dir, pdf_dir, is_gov)
             st.markdown("#### 🖼️ Source Grounding & Bounding Box Highlight")
             img_bytes = render_page_bytes(str(doc_name), int(page_num), bbox)
             if img_bytes:
-                st.image(img_bytes, caption=f"Original Source: {doc_name} (Page {page_num})", use_container_width=True)
+                st.image(img_bytes, caption=f"Original Source: {doc_name} (Page {page_num})", width="stretch")
 
     st.markdown("<div style='height:1rem;'></div>", unsafe_allow_html=True)
     if is_gov:
@@ -834,19 +864,22 @@ def view_my_documents(user, is_gov, idx_dir, pdf_dir):
     )
 
     if uploaded_files:
-        if st.button("🚀 Process & Ingest Files", type="primary", use_container_width=True):
+        if st.button("🚀 Process & Ingest Files", type="primary", width="stretch"):
             prog = st.progress(0.0, text="Validating files…")
             db = idx_dir / "facts.db"
             conn = sqlite3.connect(str(db))
-            
             for i, uf in enumerate(uploaded_files):
                 pct = (i + 1) / len(uploaded_files)
                 prog.progress(pct, text=f"Processing {uf.name}…")
                 data = uf.read()
                 ext = Path(uf.name).suffix.lower()
-                ftype = "pdf" if ext == ".pdf" else ("image" if ext in [".png", ".jpg", ".jpeg"] else ("csv" if ext == ".csv" else ("excel" if ext == ".xlsx" else "video")))
-                
-                # Register in docstore
+                ftype = (
+                    "pdf"
+                    if ext == ".pdf"
+                    else ("image" if ext in [".png", ".jpg", ".jpeg"] else ("csv" if ext == ".csv" else ("excel" if ext == ".xlsx" else "video")))
+                )
+
+                # Register document (creates storage & DB entry)
                 rec = register_document(
                     filename=uf.name,
                     file_type=ftype,
@@ -855,29 +888,28 @@ def view_my_documents(user, is_gov, idx_dir, pdf_dir):
                     owner_role=user["role"],
                     is_government=is_gov,
                 )
-                
+
                 fact_count = 0
-                file_path = rec["file_path"]
                 try:
                     if ftype == "csv":
-                        fact_count = ingest_csv_facts(file_path, uf.name, conn)
+                        fact_count = ingest_csv_facts(rec["file_path"], uf.name, conn)
                     elif ftype == "image":
-                        fact_count = ingest_image_facts(file_path, uf.name, conn)
+                        fact_count = ingest_image_facts(rec["file_path"], uf.name, conn)
                     elif ftype == "video":
-                        fact_count = ingest_video_facts(file_path, uf.name, conn, str(rec["index_path"]))
+                        fact_count = ingest_video_facts(rec["file_path"], uf.name, conn, str(rec["index_path"]))
                     elif ftype == "pdf":
                         from study.upload import validate_pdf
                         validate_pdf(data, uf.name)
                         dest_pdf = pdf_dir / uf.name
                         dest_pdf.write_bytes(data)
-                        from tracerag.ingest import build_index
-                        build_index(str(pdf_dir), str(idx_dir))
-                        fact_count = 10
+                        from tracerag.ingest import ingest_single_pdf
+                        fact_count = ingest_single_pdf(str(dest_pdf), str(idx_dir))
                     update_document_status(rec["doc_id"], "ready", is_gov, fact_count=fact_count)
                 except Exception as e:
                     update_document_status(rec["doc_id"], "error", is_gov, error_message=str(e))
-            
+                    st.error(f"Error processing {uf.name}: {e}")
             conn.close()
+            prog.progress(1.0, text="Completed!")
             st.success("✅ Files processed and indexed successfully!")
             time.sleep(0.8)
             st.rerun()
@@ -887,20 +919,19 @@ def view_my_documents(user, is_gov, idx_dir, pdf_dir):
     st.markdown("#### 📚 Your Document Library")
     search_q = st.text_input("🔍 Search document library", placeholder="Search by filename…")
     docs = list_user_documents(user["username"], user["role"], is_government=is_gov, search_query=search_q)
-
     if docs:
         for d in docs:
             with st.container():
                 st.markdown(
                     f"""
-                    <div class="dashboard-card" style="margin-bottom:0.75rem;">
-                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div class=\"dashboard-card\" style=\"margin-bottom:0.75rem;\">
+                        <div style=\"display:flex; justify-content:space-between; align-items:center;\">
                             <div>
-                                <strong style="font-size:1rem; color:#0f281e;">{d['filename']}</strong>
-                                <span class="top-nav-badge badge-role" style="margin-left:0.5rem;">{d['file_type'].upper()}</span>
-                                <span style="font-size:0.8rem; color:#6b7280; margin-left:0.5rem;">{round(d['file_size']/1024, 1)} KB · {d['upload_time'][:16].replace('T', ' ')}</span>
+                                <strong style=\"font-size:1rem; color:#0f281e;\">{d['filename']}</strong>
+                                <span class=\"top-nav-badge badge-role\" style=\"margin-left:0.5rem;\">{d['file_type'].upper()}</span>
+                                <span style=\"font-size:0.8rem; color:#6b7280; margin-left:0.5rem;\">{round(d['file_size']/1024, 1)} KB · {d['upload_time'][:16].replace('T', ' ')}</span>
                             </div>
-                            <span class="badge-online">{'✅ ' + d['status'].capitalize()}</span>
+                            <span class=\"badge-online\">{'✅ ' + d['status'].capitalize()}</span>
                         </div>
                     </div>
                     """,
@@ -908,17 +939,57 @@ def view_my_documents(user, is_gov, idx_dir, pdf_dir):
                 )
                 c_del, c_ask, c_space = st.columns([1, 2, 4])
                 with c_del:
-                    if st.button("🗑 Delete", key=f"del_{d['doc_id']}", use_container_width=True):
+                    if st.button("🗑 Delete", key=f"del_{d['doc_id']}", width="stretch"):
                         delete_document(d["doc_id"], user["username"], user["role"], is_gov)
                         st.success(f"Deleted {d['filename']}.")
                         st.rerun()
                 with c_ask:
                     def _go_ask_doc(fname=d['filename']):
-                            st.session_state["enterprise_nav"] = "❓ Ask a Question"
-                            st.session_state["question"] = f"From {fname}, what are the key findings?"
-                    if st.button("❓ Ask about this doc", key=f"ask_{d['doc_id']}",
-                                 use_container_width=True, on_click=_go_ask_doc):
-                        pass
+                        st.session_state["enterprise_nav"] = "❓ Ask a Question"
+                        st.session_state["question"] = f"From {fname}, what are the key findings?"
+                    st.button("❓ Ask about this doc", key=f"ask_{d['doc_id']}",
+                              width="stretch", on_click=_go_ask_doc)
+
+                # Student role AI summarization & quiz generation (ONLINE ONLY, NOT in gov offline mode)
+                if user.get("role") == "student":
+                    if is_gov:
+                        st.info("🔒 Offline Government Mode: External AI summary/quiz generation is disabled.")
+                    else:
+                        with st.expander(f"🎓 Student Tools for {d['filename']}"):
+                            api_key = os.getenv("OPENAI_API_KEY")
+                            if not api_key:
+                                st.warning("⚠️ OpenAI API key required for AI summarization & quiz generation. Set OPENAI_API_KEY environment variable to enable.")
+                            else:
+                                col_sum, col_quiz = st.columns(2)
+                                with col_sum:
+                                    if st.button(f"📝 Summarize {d['filename']}", key=f"sum_{d['doc_id']}", width="stretch"):
+                                        with st.spinner("Generating summary via OpenAI…"):
+                                            s_text = summarize_document(d["file_path"])
+                                            st.session_state[f"summary_{d['doc_id']}"] = s_text
+                                with col_quiz:
+                                    if st.button(f"🧠 Quiz & Flashcards for {d['filename']}", key=f"quiz_{d['doc_id']}", width="stretch"):
+                                        with st.spinner("Generating quiz and flashcards…"):
+                                            s_text = st.session_state.get(f"summary_{d['doc_id']}")
+                                            if not s_text or s_text.startswith("⚠️"):
+                                                s_text = summarize_document(d["file_path"])
+                                                st.session_state[f"summary_{d['doc_id']}"] = s_text
+                                            materials = generate_student_materials(s_text, api_key)
+                                            st.session_state[f"mat_{d['doc_id']}"] = materials
+
+                                if f"summary_{d['doc_id']}" in st.session_state:
+                                    st.markdown("##### 📄 Summary")
+                                    st.write(st.session_state[f"summary_{d['doc_id']}"])
+
+                                if f"mat_{d['doc_id']}" in st.session_state:
+                                    mat = st.session_state[f"mat_{d['doc_id']}"]
+                                    if mat.get("quiz"):
+                                        st.markdown("##### ❓ Practice Quiz Questions")
+                                        for q in mat["quiz"]:
+                                            st.markdown(f"- {q}")
+                                    if mat.get("flashcards"):
+                                        st.markdown("##### 🗂️ Flashcards (Term – Definition)")
+                                        for fc in mat["flashcards"]:
+                                            st.markdown(f"- {fc}")
     else:
         st.info("No documents found matching your filter.")
 
@@ -993,7 +1064,7 @@ def view_evidence_explorer(user, is_gov, idx_dir, pdf_dir):
 
     img_bytes = render_page_bytes(sel_doc, int(page_num))
     if img_bytes:
-        st.image(img_bytes, caption=f"{sel_doc} – Page {page_num}", use_container_width=True)
+        st.image(img_bytes, caption=f"{sel_doc} – Page {page_num}", width="stretch")
     else:
         st.warning(f"Could not render page {page_num} for {sel_doc}.")
 
@@ -1006,7 +1077,7 @@ def view_evidence_explorer(user, is_gov, idx_dir, pdf_dir):
             if facts_page:
                 st.markdown("#### Facts Extracted from this Page")
                 df_page = pd.DataFrame(facts_page, columns=["Metric", "Value", "Unit", "Period", "Type", "Bounding Box"])
-                st.dataframe(df_page, use_container_width=True, hide_index=True)
+                st.dataframe(df_page, width="stretch", hide_index=True)
 
 
 def view_reports_and_comparisons(user, is_gov, idx_dir):
@@ -1049,7 +1120,7 @@ def view_reports_and_comparisons(user, is_gov, idx_dir):
                         "Delta": c["delta"],
                         "Discrepancy %": f"{c['pct_change']}%",
                     } for c in res["conflicts"]])
-                    st.dataframe(df_conf, use_container_width=True, hide_index=True)
+                    st.dataframe(df_conf, width="stretch", hide_index=True)
                 else:
                     st.success("✅ No conflicting figures found for matching periods.")
 
@@ -1064,7 +1135,7 @@ def view_reports_and_comparisons(user, is_gov, idx_dir):
                         "Change %": f"{c['pct_change']}%",
                         "Status": "⚠️ Conflict" if c["status"] == "conflict" else "✅ Match",
                     } for c in res["comparisons"]])
-                    st.dataframe(df_comp, use_container_width=True, hide_index=True)
+                    st.dataframe(df_comp, width="stretch", hide_index=True)
                 else:
                     st.info("No directly overlapping metrics found between these two documents.")
         else:
@@ -1086,7 +1157,7 @@ def view_reports_and_comparisons(user, is_gov, idx_dir):
                     "YoY Delta": t["delta"] if t["delta"] is not None else "—",
                     "Growth %": f"{t['pct_change']}%" if t["pct_change"] is not None else "—",
                 } for t in trends])
-                st.dataframe(df_trend, use_container_width=True, hide_index=True)
+                st.dataframe(df_trend, width="stretch", hide_index=True)
             else:
                 st.info(f"No trends found for '{kw}'.")
 
@@ -1123,7 +1194,7 @@ def view_audit_trail(user, is_gov, idx_dir):
                 "Reason Code": r.get("reason", ""),
                 "Timestamp": r.get("ts", "")[:19],
             } for r in ledger])
-            st.dataframe(df_ledger, use_container_width=True, hide_index=True)
+            st.dataframe(df_ledger, width="stretch", hide_index=True)
         else:
             st.info("No refusals logged.")
 
@@ -1131,7 +1202,7 @@ def view_audit_trail(user, is_gov, idx_dir):
     c_exp, c_tamper = st.columns(2)
     with c_exp:
         st.markdown("#### Export Audit Log")
-        if st.button("Export to JSONL", use_container_width=True):
+        if st.button("Export to JSONL", width="stretch"):
             with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as tmp:
                 n = audit.export_jsonl(tmp.name)
                 with open(tmp.name, "rb") as f:
@@ -1141,12 +1212,12 @@ def view_audit_trail(user, is_gov, idx_dir):
                 data,
                 "audit_export.jsonl",
                 "application/json",
-                use_container_width=True,
+                width="stretch",
             )
 
     with c_tamper:
         st.markdown("#### 🔧 Tamper Detection Test Suite")
-        if st.button("Run Tamper Test", use_container_width=True):
+        if st.button("Run Tamper Test", width="stretch"):
             demo_dir = str(idx_dir / "tamper_demo")
             with st.spinner("Testing tamper resistance…"):
                 res = audit.tamper_demo(demo_dir)
@@ -1217,56 +1288,31 @@ def main():
         return
 
     user   = st.session_state["user"]
-    role   = user["role"]
-    is_gov = user.get("offline", False)   # True only for government role
+    role   = user["role"].lower().strip()
+    is_gov = (role == "government")
 
     # Paths are scoped to the user's environment
     _idx_dir = ROOT / "data" / "gov_index" if is_gov else ROOT / "data" / "index"
     _pdf_dir = ROOT / "data" / "gov_pdfs"  if is_gov else ROOT / "data" / "raw" / "pdfs"
 
-    q_text, run, strict = sidebar()
-
-    if "result"   not in st.session_state: st.session_state.result   = None
-    if "question" not in st.session_state: st.session_state.question = ""
-
-    if run and q_text:
-        with st.spinner("Searching documents…"):
-            from tracerag.engine import Engine
-            _eng = Engine(str(_idx_dir), str(_pdf_dir))
-            qid  = f"ui_{int(time.time()*1000)}"
-            st.session_state.result   = _eng.answer(qid, q_text, strict=strict)
-            st.session_state.question = q_text
-
-    result   = st.session_state.result
-    question = st.session_state.question
-    allowed  = ROLE_TABS.get(role, [])
-
-    # Render Top Navigation Header
+    apply_enterprise_theme()
     render_top_navbar(user, title="TraceRAG Enterprise Platform")
 
-    # Routing based on sidebar navigation
-    nav_item = st.session_state.get("enterprise_nav", "🏠 Home")
-
-    if nav_item == "🏠 Home":
-        view_home(user, result, question, allowed, _idx_dir, _pdf_dir, is_gov)
-    elif nav_item == "❓ Ask a Question":
-        view_ask_question(user, result, question, allowed, _idx_dir, _pdf_dir, is_gov)
-    elif nav_item == "📁 My Documents":
-        view_my_documents(user, is_gov, _idx_dir, _pdf_dir)
-    elif nav_item == "🎬 Media Library":
-        view_media_library(user, is_gov, _idx_dir, _pdf_dir)
-    elif nav_item == "🔍 Evidence Explorer":
-        view_evidence_explorer(user, is_gov, _idx_dir, _pdf_dir)
-    elif nav_item == "📊 Reports & Comparisons":
-        view_reports_and_comparisons(user, is_gov, _idx_dir)
-    elif nav_item == "🛡️ Audit Trail":
-        view_audit_trail(user, is_gov, _idx_dir)
-    elif nav_item == "⚙️ Settings":
-        view_settings(user, is_gov, _idx_dir)
-    elif nav_item == "❓ Help & Support":
-        view_help_and_support(user, is_gov)
+    # Route strictly to independent role dashboard
+    if role == "government":
+        render_government_interface(user, _idx_dir, _pdf_dir)
+    elif role == "analyst":
+        render_analyst_interface(user, _idx_dir, _pdf_dir)
+    elif role == "journalist":
+        render_journalist_interface(user, _idx_dir, _pdf_dir)
+    elif role == "student":
+        render_student_dashboard(user, _idx_dir, _pdf_dir)
+    elif role == "factchecker":
+        render_factchecker_interface(user, _idx_dir, _pdf_dir)
+    elif role == "auditor":
+        render_auditor_dashboard(user, _idx_dir, _pdf_dir)
     else:
-        view_home(user, result, question, allowed, _idx_dir, _pdf_dir, is_gov)
+        st.error(f"Unrecognized role: {role}")
 
 
 # ── Login screen (single page, login + create account) ───────────────────────
@@ -1296,7 +1342,7 @@ def _show_login():
                 password  = st.text_input("Password", type="password",
                                            placeholder="your-password")
                 submitted = st.form_submit_button("Login →",
-                                                   use_container_width=True,
+                                                   width="stretch",
                                                    type="primary")
             if submitted:
                 if not username or not password:
@@ -1316,28 +1362,16 @@ def _show_login():
                     except AuthError as e:
                         st.error(f"❌ {e}")
 
-            with st.expander("👥 Demo accounts"):
-                st.markdown(
-                    "| Username | Password | Role | Env |\n"
-                    "|---|---|---|---|\n"
-                    "| `government` | `gov-secure-2024` | Government | 🔒 Offline |\n"
-                    "| `analyst` | `analyst-pass` | Policy Analyst | 🌐 Online |\n"
-                    "| `journalist` | `press-pass` | Journalist | 🌐 Online |\n"
-                    "| `student` | `learn-2024` | Student | 🌐 Online |\n"
-                    "| `checker` | `verify-pass` | Fact-Checker | 🌐 Online |\n"
-                    "| `auditor` | `audit-admin` | Auditor / Admin | 🌐 Online |"
-                )
-
         # ── Create Account tab ────────────────────────────────────────────────
         with tab_register:
-            st.info("Government accounts must be provisioned by an administrator.")
+            st.info("🔒 Government and Auditor accounts require administrator provisioning.")
             with st.form("register_form"):
                 reg_name  = st.text_input("Full Name", placeholder="Your Name")
                 reg_user  = st.text_input("Username",  placeholder="choose-a-username")
                 reg_pass  = st.text_input("Password",  type="password",
                                            placeholder="at least 6 characters")
                 reg_pass2 = st.text_input("Confirm Password", type="password")
-                reg_role  = st.selectbox("Role", [
+                reg_role  = st.selectbox("Select Role", [
                     "student", "analyst", "journalist", "factchecker"
                 ], format_func=lambda r: {
                     "student":     "🎓 Student",
@@ -1346,7 +1380,7 @@ def _show_login():
                     "factchecker": "🔍 Fact-Checker",
                 }.get(r, r))
                 reg_btn = st.form_submit_button("Create Account →",
-                                                 use_container_width=True,
+                                                 width="stretch",
                                                  type="primary")
             if reg_btn:
                 if reg_pass != reg_pass2:
@@ -1459,7 +1493,7 @@ def _render_source(doc: str, page: int, bbox, session_dirs: dict):
     img = render_page_bytes(str(pdf_path), page, bbox, dpi=120)
     if img:
         with st.expander(f"📄 Source: {doc} p.{page}"):
-            st.image(img, use_container_width=True)
+            st.image(img, width="stretch")
 
 
 # ── Tab: Upload ───────────────────────────────────────────────────────────────
@@ -1491,11 +1525,11 @@ def study_tab_upload():
     col1, col2 = st.columns([3, 1])
     with col1:
         process_btn = st.button("Process PDFs ▶", type="primary",
-                                use_container_width=True,
+                                width="stretch",
                                 disabled=not uploaded)
     with col2:
         delete_btn = st.button("🗑 Delete my files",
-                               use_container_width=True,
+                               width="stretch",
                                disabled=st.session_state.study_session_id is None)
 
     if delete_btn and st.session_state.study_session_id:
@@ -1680,7 +1714,7 @@ def study_tab_summary():
             "Period": n["period"],
             "Page":   n["page"],
         } for n in s["key_numbers"]]
-        st.dataframe(rows, use_container_width=True)
+        st.dataframe(rows, width="stretch")
 
 
 # ── Tab: Flashcards ──────────────────────────────────────────────────────────
@@ -1831,7 +1865,7 @@ def study_tab_quiz():
 
     with col_btn:
         next_btn = st.button("▶ Next Question", type="primary",
-                              use_container_width=True)
+                              width="stretch")
 
     st.divider()
 
@@ -1896,7 +1930,7 @@ def study_tab_quiz():
                         key=f"quiz_radio_{q.get('card_id','')}_{len(choices)}")
 
     submit = st.button("Submit ✔", disabled=selected is None,
-                       use_container_width=True, type="primary")
+                       width="stretch", type="primary")
 
     if submit and selected is not None:
         chosen  = selected[3:]   # strip "A. " prefix
@@ -1949,10 +1983,10 @@ def study_tab_videos():
                             st.caption(f"📺 {r['channel']}"
                                        + (f" · ⏱ {r['duration']}" if r.get("duration") else ""))
                     with col_link:
-                        st.link_button("Watch ▶", r["url"], use_container_width=True)
+                        st.link_button("Watch ▶", r["url"], width="stretch")
                 else:
                     # Mode A — search link
-                    st.link_button(r["title"], r["url"], use_container_width=True)
+                    st.link_button(r["title"], r["url"], width="stretch")
 
 
 def study_tab_ask():
@@ -1995,14 +2029,13 @@ def study_tab_ask():
             st.caption(f"Source: {docs[0]} p.{pages[0]}")
             bbox = result.get("bbox")
             if isinstance(bbox, str):
-                import json as _json
                 try:
-                    bbox = _json.loads(bbox)
+                    bbox = json.loads(bbox)
                 except Exception:
                     bbox = None
             img = render_page_bytes(str(dirs["pdfs"] / docs[0]), pages[0], bbox)
             if img:
-                st.image(img, use_container_width=True)
+                st.image(img, width="stretch")
 
         receipt = result.get("audit_receipt", "")
         if receipt:
@@ -2046,7 +2079,7 @@ def study_tab_progress():
         })
     if rows:
         import pandas as pd
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), width="stretch")
 
     score = st.session_state.study_quiz_score
     st.markdown("#### Quiz Score")
@@ -2113,11 +2146,11 @@ def study_tab_my_pdfs():
     col_proc, col_del = st.columns([3, 1])
     with col_proc:
         process = st.button("📥 Process PDF", type="primary",
-                             use_container_width=True,
+                             width="stretch",
                              disabled=not uploaded_files)
     with col_del:
         can_del = bool(st.session_state.get("study_session_id"))
-        if st.button("🗑 Delete files", use_container_width=True, disabled=not can_del):
+        if st.button("🗑 Delete files", width="stretch", disabled=not can_del):
             delete_session(st.session_state["study_session_id"])
             for k in list(st.session_state.keys()):
                 if k.startswith("study_"):
@@ -2265,14 +2298,14 @@ def study_tab_my_pdfs():
                         img = render_page_bytes(str(pdf_path), b["page"],
                                                 b.get("bbox"), dpi=120)
                         if img:
-                            st.image(img, use_container_width=True)
+                            st.image(img, width="stretch")
 
     if s.get("key_numbers"):
         with st.expander("🔢 Key Numbers"):
             st.dataframe([{
                 "Value": n["value"], "Unit": n["unit"],
                 "Period": n["period"], "Page": n["page"],
-            } for n in s["key_numbers"]], use_container_width=True)
+            } for n in s["key_numbers"]], width="stretch")
 
     # ── Knowledge Q&A from the uploaded PDF ──────────────────────────────────
     st.divider()
@@ -2317,7 +2350,7 @@ def study_tab_my_pdfs():
                 st.caption(f"Source: **{docs}** · Page **{pages}**")
                 img = render_page_bytes(str(pdf_path), pages, bbox, dpi=130)
                 if img:
-                    st.image(img, caption=f"Page {pages}", use_container_width=True)
+                    st.image(img, caption=f"Page {pages}", width="stretch")
 
         receipt = result.get("audit_receipt", "")
         if receipt:

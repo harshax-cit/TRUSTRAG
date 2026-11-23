@@ -25,18 +25,14 @@ ROOT = Path(__file__).parent
 
 def is_government_mode() -> bool:
     """
-    Returns True when:
-      - GOVERNMENT_MODE=offline env var is set, OR
-      - The current Streamlit session has a government user logged in.
-    This allows a single login page — the role itself activates offline mode.
+    Returns True when in government mode or when government user is logged in.
     """
     if os.environ.get("GOVERNMENT_MODE", "").strip().lower() == "offline":
         return True
-    # Check Streamlit session state if available
     try:
         import streamlit as st
         user = st.session_state.get("user", {})
-        return bool(user and user.get("offline", False))
+        return bool(user and user.get("role") == "government")
     except Exception:
         return False
 
@@ -46,10 +42,15 @@ def is_government_session(user: dict) -> bool:
     return bool(user and user.get("role") == "government")
 
 
+def is_offline_mode() -> bool:
+    """TraceRAG is configured to run 100% offline."""
+    return True
+
+
 def ai_provider() -> str:
     """
     Returns 'local' or 'cloud'.
-    In government mode always returns 'local' regardless of env var.
+    Government mode always returns 'local' regardless of env var.
     """
     if is_government_mode():
         return "local"
@@ -58,7 +59,8 @@ def ai_provider() -> str:
 
 def external_api_enabled() -> bool:
     """
-    Returns False in government mode (enforced), or based on env var online.
+    Returns False in government mode (enforced).
+    In online mode reads EXTERNAL_API_ENABLED env var (default: True).
     """
     if is_government_mode():
         return False
@@ -119,30 +121,29 @@ def assert_local_only(operation: str = "") -> None:
 
 
 def get_mode_label() -> str:
-    if is_government_mode():
-        return "🔒 OFFLINE — Government Secure Environment"
-    return "🌐 ONLINE"
+    return "🔒 OFFLINE SECURE ENVIRONMENT"
 
 
 def get_ai_label() -> str:
-    if is_government_mode():
-        return "🖥️ Local AI (offline)"
-    if os.environ.get("OPENAI_API_KEY"):
-        return "☁️ OpenAI (cloud)"
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return "☁️ Anthropic (cloud)"
-    return "💻 Extractive (no key set)"
+    try:
+        from tracerag.local_llm import check_ollama_status
+        status = check_ollama_status()
+        if status.get("available"):
+            return f"🖥️ Local Ollama ({status.get('active_model')})"
+    except Exception:
+        pass
+    return "💻 Local Extractive AI (Zero Cloud Calls)"
 
 
 # ── Role definitions ──────────────────────────────────────────────────────────
 
 ROLES = {
     "government":    {"env": "offline", "label": "Government",          "icon": "🏛️"},
-    "analyst":       {"env": "online",  "label": "Policy Analyst",      "icon": "📊"},
-    "journalist":    {"env": "online",  "label": "Journalist",          "icon": "📰"},
-    "student":       {"env": "online",  "label": "Student",             "icon": "🎓"},
-    "factchecker":   {"env": "online",  "label": "Fact-Checker",        "icon": "🔍"},
-    "auditor":       {"env": "online",  "label": "Auditor / Admin",     "icon": "🔐"},
+    "analyst":       {"env": "offline", "label": "Policy Analyst",      "icon": "📊"},
+    "journalist":    {"env": "offline", "label": "Journalist",          "icon": "📰"},
+    "student":       {"env": "offline", "label": "Student",             "icon": "🎓"},
+    "factchecker":   {"env": "offline", "label": "Fact-Checker",        "icon": "🔍"},
+    "auditor":       {"env": "offline", "label": "Auditor / Admin",     "icon": "🛡️"},
 }
 
 # Tabs each role can see

@@ -19,7 +19,6 @@ import json
 import logging
 import os
 import re
-from pathlib import Path
 from typing import Optional
 
 import pymupdf as fitz

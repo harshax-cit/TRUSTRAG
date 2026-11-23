@@ -50,14 +50,13 @@ def test_app_loads():
 
 @pytest.mark.skipif(not INDEX_EXISTS, reason="Index not built")
 def test_all_tabs_render():
-    """After login as analyst, tabs render without exception."""
+    """After login as analyst, app renders without exception."""
     at = AppTest.from_file(APP_PATH, default_timeout=TIMEOUT)
     _login_as_analyst(at)
 
     assert not at.exception, f"Exception after login: {at.exception}"
-    # Analyst should see at least 1 tab
-    tab_labels = [t.label for t in at.tabs]
-    assert len(tab_labels) >= 1, f"Expected >=1 tabs after login, got: {tab_labels}"
+    # App uses sidebar radio navigation, not st.tabs() — just check it loaded
+    assert at.sidebar.radio, "Expected sidebar navigation radio widget"
 
 
 @pytest.mark.skipif(not INDEX_EXISTS, reason="Index not built")

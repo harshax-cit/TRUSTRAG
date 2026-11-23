@@ -7,10 +7,7 @@ optionally fuses with a dense ranker, and returns top-k regions.
 
 from __future__ import annotations
 
-import json
 import logging
-import math
-import os
 from typing import Optional
 
 from rank_bm25 import BM25Okapi

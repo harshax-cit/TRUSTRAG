@@ -52,3 +52,27 @@ Thumbs.db
 *.env
 .env
 secrets.toml
+
+
+# User uploaded documents (session data)
+data/gov_docs/
+data/user_docs/
+data/gov_pdfs/
+data/gov_index/
+
+# Generated index files (rebuilt via run.py build)
+data/index/facts.db
+data/index/regions.jsonl
+data/index/audit.jsonl
+data/index/audit_anchor.txt
+data/index/docstore.db
+data/index/tamper_demo/
+
+# User database (runtime, not source)
+data/users.json
+
+# Agent skills cache
+.agents/
+
+# Config with model paths
+config/models.json

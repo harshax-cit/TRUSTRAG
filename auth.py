@@ -66,17 +66,35 @@ _DEFAULT_USERS = {
                    "role": "auditor",    "name": "Auditor / Admin"},
 }
 
+USERS_FILE = Path(__file__).parent / "data" / "users.json"
+
 
 def _load_users() -> dict:
+    global _RUNTIME_USERS
     if not _RUNTIME_USERS:
         # Seed from file or defaults
-        users_file = os.environ.get("TRACERAG_USERS_FILE", "")
-        if users_file and Path(users_file).exists():
-            with open(users_file) as f:
-                _RUNTIME_USERS.update(json.load(f))
-        else:
-            _RUNTIME_USERS.update(_DEFAULT_USERS)
+        custom_file = os.environ.get("TRACERAG_USERS_FILE", "")
+        fpath = Path(custom_file) if custom_file else USERS_FILE
+        if fpath.exists():
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    _RUNTIME_USERS.update(json.load(f))
+            except Exception:
+                pass
+        # Ensure default users exist as baseline
+        for u, data in _DEFAULT_USERS.items():
+            if u not in _RUNTIME_USERS:
+                _RUNTIME_USERS[u] = data
     return _RUNTIME_USERS
+
+
+def _save_users() -> None:
+    try:
+        USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(_RUNTIME_USERS, f, indent=2)
+    except Exception:
+        pass
 
 
 # ── Error class ───────────────────────────────────────────────────────────────
@@ -114,13 +132,13 @@ def authenticate(username: str, password: str) -> dict:
 
 # ── Account creation ──────────────────────────────────────────────────────────
 
-SELF_REGISTER_ROLES = ["analyst", "journalist", "student", "factchecker"]
+SELF_REGISTER_ROLES = ["student", "analyst", "journalist", "factchecker", "government", "auditor"]
 
 
 def create_account(username: str, password: str,
                    name: str, role: str) -> dict:
     """
-    Create a new account. Only non-government roles allowed.
+    Create a new account.
     Returns the new user dict.
     Raises AuthError on validation failure.
     """
@@ -136,9 +154,7 @@ def create_account(username: str, password: str,
         raise AuthError("Full name is required.")
     if role not in SELF_REGISTER_ROLES:
         raise AuthError(
-            f"Self-registration is only allowed for: "
-            f"{', '.join(SELF_REGISTER_ROLES)}. "
-            "Government accounts must be provisioned by an administrator."
+            f"Allowed roles: {', '.join(SELF_REGISTER_ROLES)}."
         )
 
     users = _load_users()
@@ -150,13 +166,106 @@ def create_account(username: str, password: str,
         "role":          role,
         "name":          name,
     }
+    _save_users()
     return authenticate(username, password)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def get_role_info(role: str) -> dict:
-    return ROLES.get(role, {"label": role, "icon": "👤", "env": "online"})
+    return ROLES.get(role, {"label": role, "icon": "👤", "env": "offline"})
+
+
+ROLE_PERMISSIONS = {
+    "government": {
+        "title": "Government — Offline Secure Interface",
+        "allowed_pages": [
+            "🏛️ Overview",
+            "📁 Document Repository",
+            "📤 Upload & Extraction",
+            "🔍 Local Search & Highlighting",
+            "🎯 Claim-to-Pixel Verifier",
+            "⚖️ Conflict & Revision Center",
+            "🛡️ Local Audit & Receipts",
+            "⚙️ System Status",
+        ],
+    },
+    "analyst": {
+        "title": "Policy Analyst — Offline Interface",
+        "allowed_pages": [
+            "📊 Policy Research Desk",
+            "📑 Cross-Document Comparison",
+            "💰 Expenditure Analysis",
+            "📈 Metric & Trend Explorer",
+            "📝 Policy Brief Generator",
+            "🔍 Citation & Evidence Viewer",
+            "📥 Export Findings",
+            "⚙️ System Status",
+        ],
+    },
+    "journalist": {
+        "title": "Journalist — Offline Interface",
+        "allowed_pages": [
+            "📰 Fact-Checking Workspace",
+            "💬 Quote-Ready Citations",
+            "🚦 Safe-to-Publish Screener",
+            "⚠️ Stale-Number & Revision Alerts",
+            "⚖️ Conflicting Statements Desk",
+            "📸 Evidence Screenshot & Pages",
+            "📜 Research History & Receipts",
+            "⚙️ System Status",
+        ],
+    },
+    "student": {
+        "title": "Student — Offline Interface",
+        "allowed_pages": [
+            "🎓 Learning Hub",
+            "🤖 Local Document Tutor",
+            "💡 Simple-Language Explanations",
+            "❓ PDF Q&A & Follow-ups",
+            "📖 Glossary & Important Terms",
+            "📊 Chart & Table Insights",
+            "📝 Study Notes & Summaries",
+            "🃏 Leitner Flashcards & Quizzes",
+            "⚙️ System Status",
+        ],
+    },
+    "factchecker": {
+        "title": "Fact-Checker — Offline Interface",
+        "allowed_pages": [
+            "🔍 Claim Verification Desk",
+            "🏷️ Claim Classification (Supported/Contradicted)",
+            "🎯 Near-Miss Detection",
+            "📑 Cross-Document Verification",
+            "⚖️ Conflicting Data Identification",
+            "📋 Verification Report Generator",
+            "📦 Export Evidence Pack",
+            "⚙️ System Status",
+        ],
+    },
+    "auditor": {
+        "title": "Auditor & Admin — Offline Interface",
+        "allowed_pages": [
+            "🛡️ System Overview & Health",
+            "📜 HMAC Chained Audit Log",
+            "🔗 Chain Integrity & Tamper Test",
+            "🧾 Verification Receipt Inspector",
+            "🚫 Refusal Ledger",
+            "👥 Local User Activity Monitor",
+            "📁 Document Access History",
+            "👤 User & Role Management",
+            "⚙️ System Status",
+        ],
+    },
+}
+
+
+def can_access_route(role: str, page_name: str) -> bool:
+    """Backend authorization guard ensuring users can only load their role's pages."""
+    perms = ROLE_PERMISSIONS.get(role.lower().strip())
+    if not perms:
+        return False
+    return page_name in perms["allowed_pages"]
 
 
 def is_authorised(session_user: Optional[dict], required_role: str) -> bool:

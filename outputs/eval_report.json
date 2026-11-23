@@ -2,8 +2,8 @@
   "total": 10,
   "answer_accuracy": 1.0,
   "page_accuracy": 0.6,
-  "status_accuracy": 0.9,
-  "weighted_score": 0.87,
+  "status_accuracy": 1.0,
+  "weighted_score": 0.9,
   "by_type": {
     "refuse": {
       "total": 2,
@@ -33,7 +33,7 @@
       "total": 1,
       "ans_acc": 1.0,
       "pg_acc": 0.0,
-      "st_acc": 0.0
+      "st_acc": 1.0
     }
   }
 }

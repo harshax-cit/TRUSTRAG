@@ -130,6 +130,37 @@ class AuditLog:
 
         return True, f"Chain intact. {line_num} records verified."
 
+    def re_sign_chain(self) -> int:
+        """Walk all records, recalculate cryptographic HMAC chain, and update anchor."""
+        key = _get_key()
+        if not os.path.exists(self._audit_path):
+            return 0
+        records = []
+        with open(self._audit_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        rec = json.loads(line)
+                        if "_TAMPERED" in rec:
+                            del rec["_TAMPERED"]
+                        records.append({k: v for k, v in rec.items() if k != "chain_hash"})
+                    except Exception:
+                        pass
+        prev_hash = "0" * 64
+        signed = []
+        for r in records:
+            payload = prev_hash + json.dumps(r, sort_keys=True)
+            h = _hmac_hash(key, payload)
+            r["chain_hash"] = h
+            signed.append(r)
+            prev_hash = h
+        with open(self._audit_path, "w", encoding="utf-8") as f:
+            for s in signed:
+                f.write(json.dumps(s) + "\n")
+        self._write_anchor(prev_hash)
+        return len(signed)
+
     def export_jsonl(self, out_path: str) -> int:
         """Export audit log to a JSONL file. Returns record count."""
         if not os.path.exists(self._audit_path):

@@ -6,5 +6,5 @@
 {"id": "q700445", "answer": "554.5 million", "doc": "es2023-24_state_economy_external.pdf", "page": 61, "bbox": [314.03936767578125, 309.913330078125, 340.6484069824219, 323.69635009765625], "status": "answer"}
 {"id": "q421609", "answer": "127.85 crore", "doc": ["kerala_budget_speech_2026-27.pdf", "kerala_budget_speech_2026-27.pdf"], "page": [120, 120], "bbox": [424.5400085449219, 427.04376220703125, 447.9524841308594, 442.6983642578125], "status": "answer"}
 {"id": "q146811", "answer": "360", "doc": "annexure_scanned.pdf", "page": 6, "bbox": [179.96374401081005, 519.046009130588, 419.31552354518743, 534.5238027454391], "status": "answer"}
-{"id": "q775331", "answer": "5.4 per cent", "doc": "es2024-25_state_economy_external.pdf", "page": 25, "bbox": [191.2248077392578, 441.6109924316406, 207.580810546875, 456.64697265625], "status": "answer"}
+{"id": "q775331", "answer": ["5.4 per cent", "5.6 per cent"], "doc": ["es2024-25_state_economy_external.pdf", "es2024-25_money_prices_ORGANIZER-MODIFIED.pdf"], "page": [25, 46], "bbox": [191.2248077392578, 441.6109924316406, 207.580810546875, 456.64697265625], "status": "conflict"}
 {"id": "q512379", "answer": "0.9 percentage points", "doc": "es2024-25_money_prices_ORGANIZER-MODIFIED.pdf", "page": 48, "bbox": [401.3399963378906, 554.4019775390625, 418.739990234375, 569.43798828125], "status": "answer"}

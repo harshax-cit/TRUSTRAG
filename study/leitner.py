@@ -13,7 +13,6 @@ Box schedule (review every N sessions):
 
 from __future__ import annotations
 
-from typing import Optional
 
 
 SCHEDULE = {1: 1, 2: 2, 3: 4, 4: 8, 5: 999}

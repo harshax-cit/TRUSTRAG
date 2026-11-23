@@ -32,11 +32,8 @@ from .textutil import (
     clean_text,
     extract_periods,
     extract_qualifiers,
-    normalise_period,
     parse_number,
     sentence_split,
-    tokenise,
-    UNIT_FAMILY,
 )
 
 logger = logging.getLogger(__name__)
@@ -178,6 +175,78 @@ def build_index(pdf_dir: str, index_dir: str) -> None:
 
     conn.close()
     logger.info(f"Indexing complete. DB: {db_path}")
+
+
+def ingest_single_pdf(pdf_path: str, index_dir: str) -> int:
+    """Ingest a single PDF into an index directory without rebuilding everything."""
+    Path(index_dir).mkdir(parents=True, exist_ok=True)
+    db_path = os.path.join(index_dir, "facts.db")
+    conn = _open_db(db_path)
+    regions_path = os.path.join(index_dir, "regions.jsonl")
+
+    p = Path(pdf_path)
+    fname = p.name
+    sha256 = _file_sha256(str(p))
+
+    doc_facts, doc_regions, page_meta = _ingest_pdf(str(p), fname)
+
+    cur = conn.cursor()
+    # Remove old facts for this doc if any
+    cur.execute("DELETE FROM facts WHERE doc=?", (fname,))
+    for f in doc_facts:
+        cur.execute(
+            """INSERT INTO facts
+               (doc,page,region_id,kind,metric,entity,period,
+                value,value_num,unit,qualifier,doc_date,bbox,
+                period_bbox,confidence,raw_text)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                f["doc"], f["page"], f.get("region_id"),
+                f.get("kind"), f.get("metric"), f.get("entity"),
+                f.get("period"), f.get("value"), f.get("value_num"),
+                f.get("unit"), f.get("qualifier"), f.get("doc_date"),
+                json.dumps(f.get("bbox")), json.dumps(f.get("period_bbox")),
+                f.get("confidence", 1.0), f.get("raw_text", ""),
+            ),
+        )
+
+    import datetime
+    cur.execute(
+        "INSERT OR REPLACE INTO manifest (doc,sha256,pages,indexed_at) VALUES (?,?,?,?)",
+        (fname, sha256, page_meta["total_pages"], datetime.datetime.utcnow().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+    # Append new regions to regions.jsonl
+    with open(regions_path, "a", encoding="utf-8") as fh:
+        for r in doc_regions:
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    # Update manifest.json
+    manifest_file = os.path.join(index_dir, "manifest.json")
+    manifest = {}
+    if os.path.exists(manifest_file):
+        try:
+            with open(manifest_file, "r", encoding="utf-8") as fh:
+                manifest = json.load(fh)
+        except Exception:
+            manifest = {}
+    manifest[fname] = {
+        "doc": fname,
+        "sha256": sha256,
+        "pages": page_meta["total_pages"],
+        "text_pages": page_meta["text_pages"],
+        "scan_pages": page_meta["scan_pages"],
+        "table_pages": page_meta["table_pages"],
+        "chart_pages": page_meta["chart_pages"],
+        "fact_count": len(doc_facts),
+        "region_count": len(doc_regions),
+    }
+    with open(manifest_file, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2)
+
+    return len(doc_facts)
 
 
 def get_facts(index_dir: str) -> sqlite3.Connection:

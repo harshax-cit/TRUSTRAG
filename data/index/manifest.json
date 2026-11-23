@@ -1,4 +1,15 @@
 {
+  "CDC_UNIT V_New.pdf": {
+    "doc": "CDC_UNIT V_New.pdf",
+    "sha256": "9ca89a70c228cef3a76aa481326ebd0f36e64a2deded28e5d649737eda284be1",
+    "pages": 46,
+    "text_pages": 46,
+    "scan_pages": 0,
+    "table_pages": 0,
+    "chart_pages": 11,
+    "fact_count": 167,
+    "region_count": 389
+  },
   "annexure_scanned.pdf": {
     "doc": "annexure_scanned.pdf",
     "sha256": "39711c2bb1193298f1ae2bcfa15121c6751917ae87b4aee1ee02585b1747b579",
@@ -108,5 +119,16 @@
     "chart_pages": 0,
     "fact_count": 1361,
     "region_count": 3659
+  },
+  "Case Study 1_ACTG_Predictive_Maintenance.pdf": {
+    "doc": "Case Study 1_ACTG_Predictive_Maintenance.pdf",
+    "sha256": "c0f78def7f9193434a11a8c75c38a44cd8b60295bc11840f019a4bfe5bdf8221",
+    "pages": 4,
+    "text_pages": 3,
+    "scan_pages": 1,
+    "table_pages": 1,
+    "chart_pages": 0,
+    "fact_count": 28,
+    "region_count": 63
   }
 }
