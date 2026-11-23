@@ -881,39 +881,79 @@ def study_tab_upload():
         if not saved:
             return
 
-    progress.progress(0.4, text="Parsing and indexing…")
+    # ── Step 1: Index the PDF ────────────────────────────────────────────────
+    progress.progress(0.35, text="Indexing PDF (extracting text, tables, charts)…")
     try:
+        import logging
+        logging.getLogger("tracerag.ingest").setLevel(logging.WARNING)
         manifest = ingest_session_pdf(sid, saved[0])
+        progress.progress(0.55, text=f"Indexed {saved[0]}…")
     except Exception as e:
-        st.error(f"Indexing failed: {e}")
+        st.error(f"❌ Indexing failed: {e}")
+        import traceback
+        st.code(traceback.format_exc(), language="python")
         return
 
-    progress.progress(0.9, text="Building topics…")
-
+    # ── Step 2: Extract topics ────────────────────────────────────────────────
+    progress.progress(0.60, text="Extracting topics…")
     from study.topics import extract_topics
-    topics     = []
-    summaries  = {}
-    all_cards  = []
+    from study.summarise import summarise_topic
+    from study.flashcards import generate_cards
+    from study.leitner import LeitnerDeck
+
+    topics    = []
+    summaries = {}
+    all_cards = []
 
     for fname in saved:
         pdf_path  = str(dirs["pdfs"] / fname)
         reg_jsonl = str(dirs["index"] / "regions.jsonl")
-        t = extract_topics(pdf_path, reg_jsonl)
-        topics.extend(t)
+        try:
+            t = extract_topics(pdf_path, reg_jsonl)
+            if not t:
+                st.warning(f"⚠️ No topics found in {fname}. Using full document as one topic.")
+                t = [{
+                    "id": "t00", "title": fname.replace(".pdf",""),
+                    "page_start": 1, "page_end": 999,
+                    "source": "fallback", "region_ids": [], "page_texts": {},
+                }]
+                # Attach all regions to the fallback topic
+                from study.topics import _attach_regions
+                t = _attach_regions(t, reg_jsonl)
+            topics.extend(t)
+        except Exception as e:
+            st.error(f"❌ Topic extraction failed for {fname}: {e}")
+            continue
 
-        from study.summarise import summarise_topic
-        from study.flashcards import generate_cards
-        for topic in t:
-            s = summarise_topic(topic, str(dirs["index"]), fname)
+    if not topics:
+        st.error("❌ Could not extract any topics. Please try a different PDF.")
+        return
+
+    progress.progress(0.70, text=f"Building summaries for {len(topics)} topics…")
+
+    # ── Step 3: Summarise + generate cards ───────────────────────────────────
+    for idx, topic in enumerate(topics):
+        pct = 0.70 + (idx / max(len(topics), 1)) * 0.25
+        progress.progress(pct, text=f"Summarising: {topic['title'][:40]}…")
+        try:
+            s = summarise_topic(topic, str(dirs["index"]), saved[0])
             summaries[topic["id"]] = s
-            cards = generate_cards(topic, s, str(dirs["index"]),
-                                   fname, pdf_path)
+        except Exception as e:
+            st.warning(f"⚠️ Summary failed for '{topic['title']}': {e}")
+            summaries[topic["id"]] = {"title": topic["title"], "bullets": [], "key_numbers": []}
+
+        try:
+            cards = generate_cards(
+                topic, summaries[topic["id"]],
+                str(dirs["index"]), saved[0],
+                str(dirs["pdfs"] / saved[0])
+            )
             all_cards.extend(cards)
+        except Exception as e:
+            st.warning(f"⚠️ Card generation failed for '{topic['title']}': {e}")
 
-    from study.leitner import LeitnerDeck
-    deck = LeitnerDeck(all_cards)
-
-    # Store in session state
+    # ── Step 4: Store results ─────────────────────────────────────────────────
+    deck = LeitnerDeck(all_cards) if all_cards else LeitnerDeck([])
     st.session_state.study_session_id = sid
     st.session_state.study_dirs       = dirs
     st.session_state.study_manifest   = manifest
@@ -925,22 +965,20 @@ def study_tab_upload():
 
     progress.progress(1.0, text="Done!")
 
+    from study.ai_generate import _can_use_api, get_ai_label
+    ai_note = f" · {get_ai_label()}" if _can_use_api() else " · Offline mode"
     st.success(
-        f"✅ Indexed {len(saved)} file(s) · "
-        f"{len(topics)} topics · {len(all_cards)} cards"
+        f"✅ **{saved[0]}** indexed successfully!  \n"
+        f"**{len(topics)}** topics · **{len(all_cards)}** cards{ai_note}"
     )
 
     # OCR warning
-    ocr = get_ocr_stats(sid)
-    for doc, stats in ocr.items():
-        mean_conf = stats["mean_confidence"]
-        low_pages = stats["low_pages"]
-        if mean_conf < 0.80:
+    for doc, stats in get_ocr_stats(sid).items():
+        if stats["mean_confidence"] < 0.80:
             st.warning(
-                f"⚠️ **{doc}** is a scanned PDF. "
-                f"Mean OCR confidence: {mean_conf:.0%}. "
-                f"Low-confidence pages: {low_pages or 'none'}. "
-                "Some facts may be mis-read."
+                f"⚠️ **{doc}** is a scanned PDF — "
+                f"OCR confidence: {stats['mean_confidence']:.0%}. "
+                f"Low-confidence pages: {stats['low_pages'] or 'none'}."
             )
 
 
@@ -1452,15 +1490,19 @@ def study_tab_my_pdfs():
             st.error(err)
 
         if saved:
-            prog.progress(0.4, text="Indexing…")
+            # Step 1: Index
+            prog.progress(0.4, text="Indexing PDF…")
             try:
+                import logging
+                logging.getLogger("tracerag.ingest").setLevel(logging.WARNING)
                 ingest_session_pdf(sid, saved[0])
+                prog.progress(0.55, text="Indexed. Extracting topics…")
             except Exception as e:
-                st.error(f"Indexing failed: {e}")
+                st.error(f"❌ Indexing failed: {e}")
                 return
 
-            prog.progress(0.75, text="Building topics…")
-            from study.topics import extract_topics
+            # Step 2: Topics
+            from study.topics import extract_topics, _attach_regions
             from study.summarise import summarise_topic
             from study.flashcards import generate_cards
             from study.leitner import LeitnerDeck
@@ -1469,14 +1511,42 @@ def study_tab_my_pdfs():
             for fname in saved:
                 pdf_path  = str(dirs["pdfs"] / fname)
                 reg_jsonl = str(dirs["index"] / "regions.jsonl")
-                t = extract_topics(pdf_path, reg_jsonl)
-                topics.extend(t)
-                for topic in t:
-                    s = summarise_topic(topic, str(dirs["index"]), fname)
+                try:
+                    t = extract_topics(pdf_path, reg_jsonl)
+                    if not t:
+                        t = [{
+                            "id": "t00", "title": fname.replace(".pdf",""),
+                            "page_start": 1, "page_end": 999,
+                            "source": "fallback", "region_ids": [], "page_texts": {},
+                        }]
+                        t = _attach_regions(t, reg_jsonl)
+                    topics.extend(t)
+                except Exception as e:
+                    st.error(f"❌ Topic extraction failed: {e}")
+                    continue
+
+            if not topics:
+                st.error("❌ No topics could be extracted. Try a different PDF.")
+                return
+
+            # Step 3: Summaries + cards
+            for idx, topic in enumerate(topics):
+                pct = 0.60 + (idx / max(len(topics), 1)) * 0.35
+                prog.progress(pct, text=f"Summarising: {topic['title'][:35]}…")
+                try:
+                    s = summarise_topic(topic, str(dirs["index"]), saved[0])
                     summaries[topic["id"]] = s
-                    cards = generate_cards(topic, s, str(dirs["index"]),
-                                           fname, pdf_path)
-                    all_cards.extend(cards)
+                except Exception as e:
+                    summaries[topic["id"]] = {
+                        "title": topic["title"], "bullets": [], "key_numbers": []
+                    }
+                try:
+                    c = generate_cards(topic, summaries[topic["id"]],
+                                       str(dirs["index"]), saved[0],
+                                       str(dirs["pdfs"] / saved[0]))
+                    all_cards.extend(c)
+                except Exception:
+                    pass
 
             st.session_state.study_session_id = sid
             st.session_state.study_dirs       = dirs
@@ -1486,15 +1556,21 @@ def study_tab_my_pdfs():
             st.session_state.study_leitner    = LeitnerDeck(all_cards)
             st.session_state.study_pdf_names  = saved
             prog.progress(1.0, text="Done!")
-            st.success(f"✅ {len(saved)} file(s) · {len(topics)} topics · {len(all_cards)} cards")
+
+            from study.ai_generate import _can_use_api, get_ai_label
+            ai_note = f" · {get_ai_label()}" if _can_use_api() else ""
+            st.success(
+                f"✅ **{saved[0]}** ready!  "
+                f"**{len(topics)}** topics · **{len(all_cards)}** cards{ai_note}"
+            )
 
             # OCR warning
             for doc, stats in get_ocr_stats(sid).items():
                 if stats["mean_confidence"] < 0.80:
                     st.warning(
-                        f"⚠️ **{doc}** is scanned. "
+                        f"⚠️ **{doc}** is scanned — "
                         f"OCR confidence: {stats['mean_confidence']:.0%}. "
-                        f"Low-confidence pages: {stats['low_pages'] or 'none'}"
+                        f"Low-confidence pages: {stats['low_pages'] or 'none'}."
                     )
 
     # ── If PDFs are already loaded, show summary + Q&A ────────────────────────
@@ -1517,13 +1593,14 @@ def study_tab_my_pdfs():
 
     st.caption(f"Pages {sel_topic['page_start']} – {sel_topic['page_end']}")
 
-    for b in s.get("bullets", []):
+    for b_idx, b in enumerate(s.get("bullets", [])):
         col_txt, col_src = st.columns([11, 1])
         with col_txt:
             st.markdown(f"• {b['text']}")
         with col_src:
-            if st.button("🔍", key=f"mypdf_src_{b.get('page')}_{b['text'][:8]}",
-                         help="View source page"):
+            # Key uses topic id + bullet index to guarantee uniqueness
+            btn_key = f"mypdf_src_{sel_topic['id']}_{b_idx}"
+            if st.button("🔍", key=btn_key, help="View source page"):
                 if dirs and b.get("doc") and b.get("page"):
                     pdf_path = dirs["pdfs"] / b["doc"]
                     if pdf_path.exists():
