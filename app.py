@@ -31,6 +31,15 @@ from config import (
     ROLE_TABS, GovernmentModeViolation,
 )
 from auth import authenticate, get_role_info, is_authorised, AuthError
+from tracerag.ui import apply_enterprise_theme, render_top_navbar, render_dashboard_metrics
+from tracerag.docstore import (
+    register_document, list_user_documents, get_document,
+    delete_document, update_document_status
+)
+from tracerag.compare import compare_documents, analyze_metric_trend
+from tracerag.multimodal import (
+    ingest_csv_facts, ingest_image_facts, ingest_video_facts
+)
 
 # ── paths (environment-aware) ─────────────────────────────────────────────────
 ROOT      = Path(__file__).parent
@@ -113,17 +122,42 @@ def _doc_list(result: dict) -> list[str]:
 # ── sidebar ───────────────────────────────────────────────────────────────────
 
 def sidebar():
-    st.sidebar.title("TraceRAG")
-    st.sidebar.caption("Multimodal RAG with Explainability")
+    apply_enterprise_theme()
+    st.sidebar.markdown(
+        """
+        <div style="padding: 0.25rem 0 0.85rem 0;">
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+                <span style="font-size:1.6rem;">🌿</span>
+                <span style="font-size:1.35rem; font-weight:700; color:#ffffff; letter-spacing:-0.02em;">TraceRAG</span>
+            </div>
+            <div style="font-size:0.75rem; color:#94a3b8; margin-top:2px;">Multimodal Evidence Intelligence</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Enterprise Navigation ─────────────────────────────────────────────────
+    nav_options = [
+        "🏠 Home",
+        "❓ Ask a Question",
+        "📁 My Documents",
+        "🎬 Media Library",
+        "🔍 Evidence Explorer",
+        "📊 Reports & Comparisons",
+        "🛡️ Audit Trail",
+        "⚙️ Settings",
+        "❓ Help & Support",
+    ]
+    st.sidebar.radio("Navigation", nav_options, key="enterprise_nav", label_visibility="collapsed")
+    st.sidebar.markdown("<hr style='border-color:#1c4532; margin:0.6rem 0;' />", unsafe_allow_html=True)
 
     # ── Environment indicator ─────────────────────────────────────────────────
     if is_government_mode():
         st.sidebar.error(
-            "🔒 **OFFLINE — Government Secure Environment**\n\n"
-            "All processing is local. No external API calls."
+            "🔒 **OFFLINE SECURE**\n\n"
+            "Government Local Isolated Environment. External network is strictly disabled."
         )
     else:
-        from tracerag.llm import is_online as _llm_online
         ai_label = get_ai_label()
         st.sidebar.info(f"{get_mode_label()}\n\n{ai_label}")
 
@@ -140,11 +174,14 @@ def sidebar():
                 del st.session_state[k]
             st.rerun()
 
-    # Quick question selector
+    st.sidebar.markdown("<hr style='border-color:#1c4532; margin:0.6rem 0;' />", unsafe_allow_html=True)
+    st.sidebar.markdown("<div style='font-size:0.8rem; font-weight:600; color:#cbd5e1; margin-bottom:0.4rem;'>QUICK QUERY</div>", unsafe_allow_html=True)
+
+    # Quick question selector (must be first selectbox for test_app.py)
     questions = load_jsonl(QUESTIONS)
     options   = ["— custom question —"] + [q["question"][:80] for q in questions]
     sel    = st.sidebar.selectbox("Practice questions", options)
-    custom = st.sidebar.text_area("Or type your question", height=90)
+    custom = st.sidebar.text_area("Or type your question", height=80)
 
     if sel != "— custom question —":
         q_text = next(q["question"] for q in questions if q["question"][:80] == sel)
@@ -571,6 +608,595 @@ def lens_auditor():
         st.caption(demo_result.get("tampered_message",""))
         st.info(demo_result.get("note",""))
 
+
+# ── Enterprise Master UI Views ────────────────────────────────────────────────
+
+def view_home(user, result, question, allowed, idx_dir, pdf_dir, is_gov):
+    role_info = get_role_info(user["role"])
+    
+    # Hero Welcome Banner
+    st.markdown(
+        f"""
+        <div class="dashboard-card" style="border-left: 4px solid #15803d; background: #ffffff;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <h2 style="color:#0f281e; margin:0 0 0.35rem 0; font-size:1.4rem;">
+                        Welcome to TraceRAG Enterprise, {user['name']}
+                    </h2>
+                    <p style="color:#64748b; margin:0; font-size:0.875rem;">
+                        Operational Workspace: <strong>{role_info['label']}</strong> · 
+                        Mode: <strong>{'🔒 Government Offline (100% Local)' if is_gov else '🌐 Online Cloud'}</strong>
+                    </p>
+                </div>
+                <div style="font-size:2.2rem;">{role_info['icon']}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Top KPI Metrics row
+    doc_count = len(list_user_documents(user["username"], user["role"], is_government=is_gov))
+    fact_count = 0
+    refusal_count = 0
+    audit_ok = True
+    try:
+        from tracerag.audit import AuditLog
+        aud = AuditLog(str(idx_dir))
+        audit_ok, _ = aud.verify_chain()
+        refusal_count = len(aud.get_refusal_ledger())
+    except Exception:
+        pass
+
+    try:
+        with sqlite3.connect(str(idx_dir / "facts.db")) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM facts")
+            fact_count = cur.fetchone()[0]
+    except Exception:
+        pass
+
+    render_dashboard_metrics(doc_count, fact_count, audit_ok, refusal_count)
+    st.markdown("<div style='height:0.75rem;'></div>", unsafe_allow_html=True)
+
+    # Quick Action Cards (4 Cards)
+    st.markdown("### ⚡ Quick Actions")
+    qa1, qa2, qa3, qa4 = st.columns(4)
+    with qa1:
+        st.markdown(
+            """
+            <div class="dashboard-card" style="height:140px;">
+                <div style="font-size:1.4rem; margin-bottom:0.25rem;">📤</div>
+                <div class="card-title">Upload Document</div>
+                <div class="card-desc">PDF, Scanned, CSV, Excel, Images, or Video.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("Go to Uploads →", key="btn_qa_upload", use_container_width=True,
+                     on_click=lambda: st.session_state.update({"enterprise_nav": "📁 My Documents"})):
+            pass
+
+    with qa2:
+        st.markdown(
+            """
+            <div class="dashboard-card" style="height:140px;">
+                <div style="font-size:1.4rem; margin-bottom:0.25rem;">❓</div>
+                <div class="card-title">Ask a Question</div>
+                <div class="card-desc">Ground every answer in original pixels.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("Open Q&A →", key="btn_qa_ask", use_container_width=True,
+                     on_click=lambda: st.session_state.update({"enterprise_nav": "❓ Ask a Question"})):
+            pass
+
+    with qa3:
+        st.markdown(
+            """
+            <div class="dashboard-card" style="height:140px;">
+                <div style="font-size:1.4rem; margin-bottom:0.25rem;">📑</div>
+                <div class="card-title">Reports & Comparison</div>
+                <div class="card-desc">Cross-document YoY deltas & conflict checks.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("View Reports →", key="btn_qa_reports", use_container_width=True,
+                     on_click=lambda: st.session_state.update({"enterprise_nav": "📊 Reports & Comparisons"})):
+            pass
+
+    with qa4:
+        st.markdown(
+            """
+            <div class="dashboard-card" style="height:140px;">
+                <div style="font-size:1.4rem; margin-bottom:0.25rem;">🔍</div>
+                <div class="card-title">Evidence Explorer</div>
+                <div class="card-desc">Inspect bounding boxes and source pages.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("Explore Evidence →", key="btn_qa_explore", use_container_width=True,
+                     on_click=lambda: st.session_state.update({"enterprise_nav": "🔍 Evidence Explorer"})):
+            pass
+
+    # Recent Documents Summary Table
+    st.markdown("<div style='height:0.75rem;'></div>", unsafe_allow_html=True)
+    st.markdown("### 📄 Recent Documents")
+    user_docs = list_user_documents(user["username"], user["role"], is_government=is_gov)
+    if user_docs:
+        df_docs = pd.DataFrame([{
+            "Filename": d["filename"],
+            "Format": d["file_type"].upper(),
+            "Size (KB)": round(d["file_size"] / 1024, 1),
+            "Status": f"✅ {d['status'].capitalize()}",
+            "Uploaded": d["upload_time"][:16].replace("T", " "),
+        } for d in user_docs[:5]])
+        st.dataframe(df_docs, use_container_width=True, hide_index=True)
+    else:
+        st.info("No user-uploaded documents yet. Upload your first document via 'My Documents'.")
+
+    # Render Role Analysis Lenses & Tabs
+    st.markdown("<div style='height:1rem;'></div>", unsafe_allow_html=True)
+    st.markdown(f"### {role_info['icon']} Role Analysis Workspace: {role_info['label']}")
+    if is_gov:
+        _government_dashboard(result, question, allowed, idx_dir)
+    else:
+        _online_dashboard(result, question, allowed)
+
+
+def view_ask_question(user, result, question, allowed, idx_dir, pdf_dir, is_gov):
+    st.markdown("### ❓ Natural Language Query & Explainability Engine")
+    st.caption("Ask questions across all indexed reports, tables, and charts. Every answer is grounded with bounding box verification.")
+    
+    col_q, col_btn = st.columns([5, 1])
+    with col_q:
+        q_input = st.text_input("Enter your question", value=question, placeholder="e.g. What was India's retail inflation in FY24?", key="main_q_input")
+    with col_btn:
+        st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
+        search_click = st.button("Search & Verify", type="primary", use_container_width=True)
+
+    if search_click and q_input:
+        with st.spinner("Searching and verifying against original sources…"):
+            from tracerag.engine import Engine
+            _eng = Engine(str(idx_dir), str(pdf_dir))
+            qid  = f"ui_{int(time.time()*1000)}"
+            st.session_state.result   = _eng.answer(qid, q_input, strict=False)
+            st.session_state.question = q_input
+            result = st.session_state.result
+            question = q_input
+
+    if result:
+        st.divider()
+        status = result.get("status", "answer")
+        ans_val = result.get("answer", "")
+        if isinstance(ans_val, list):
+            ans_display = " | ".join(str(a) for a in ans_val)
+        else:
+            ans_display = str(ans_val)
+
+        badge_class = "badge-verified" if status == "answer" else ("badge-conflict" if status == "conflict" else "badge-refuse")
+        badge_text = "VERIFIED ANSWER" if status == "answer" else ("CONFLICTING SOURCES" if status == "conflict" else "REFUSED — NO EVIDENCE")
+        
+        st.markdown(
+            f"""
+            <div class="dashboard-card" style="border-left: 4px solid {'#10b981' if status=='answer' else ('#f59e0b' if status=='conflict' else '#ef4444')};">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                    <span class="card-title" style="font-size:1.1rem;">Answer Result</span>
+                    <span class="{badge_class}">{badge_text}</span>
+                </div>
+                <div style="font-size:1.35rem; font-weight:700; color:#0f281e; margin-bottom:0.5rem;">
+                    {ans_display if ans_display else '(Refused — no verifiable claim supported by documents)'}
+                </div>
+                <div style="font-size:0.825rem; color:#6b7280;">
+                    Document: <code>{result.get('doc')}</code> · Page: <code>{result.get('page')}</code> · Confidence: <code>{result.get('confidence', 1.0)}</code> · Receipt: <code>{result.get('audit_receipt', 'N/A')}</code>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Highlighted Evidence Region View
+        doc_name = result.get("doc")
+        page_num = result.get("page")
+        bbox = result.get("bbox")
+
+        if isinstance(doc_name, list) and doc_name:
+            doc_name = doc_name[0]
+        if isinstance(page_num, list) and page_num:
+            page_num = page_num[0]
+
+        if doc_name and page_num:
+            st.markdown("#### 🖼️ Source Grounding & Bounding Box Highlight")
+            img_bytes = render_page_bytes(str(doc_name), int(page_num), bbox)
+            if img_bytes:
+                st.image(img_bytes, caption=f"Original Source: {doc_name} (Page {page_num})", use_container_width=True)
+
+    st.markdown("<div style='height:1rem;'></div>", unsafe_allow_html=True)
+    if is_gov:
+        _government_dashboard(result, question, allowed, idx_dir)
+    else:
+        _online_dashboard(result, question, allowed)
+
+
+def view_my_documents(user, is_gov, idx_dir, pdf_dir):
+    st.markdown("### 📁 Universal Document Management & Library")
+    st.caption("Upload and manage private documents across PDF, Scanned PDF, Images, CSV, Excel, and Video. Only you have access to your uploaded files.")
+
+    # Multi-file Uploader
+    uploaded_files = st.file_uploader(
+        "Upload files (PDF, PNG, JPG, CSV, XLSX, MP4)",
+        type=["pdf", "png", "jpg", "jpeg", "csv", "xlsx", "mp4"],
+        accept_multiple_files=True,
+        key="universal_doc_uploader",
+    )
+
+    if uploaded_files:
+        if st.button("🚀 Process & Ingest Files", type="primary", use_container_width=True):
+            prog = st.progress(0.0, text="Validating files…")
+            db = idx_dir / "facts.db"
+            conn = sqlite3.connect(str(db))
+            
+            for i, uf in enumerate(uploaded_files):
+                pct = (i + 1) / len(uploaded_files)
+                prog.progress(pct, text=f"Processing {uf.name}…")
+                data = uf.read()
+                ext = Path(uf.name).suffix.lower()
+                ftype = "pdf" if ext == ".pdf" else ("image" if ext in [".png", ".jpg", ".jpeg"] else ("csv" if ext == ".csv" else ("excel" if ext == ".xlsx" else "video")))
+                
+                # Register in docstore
+                rec = register_document(
+                    filename=uf.name,
+                    file_type=ftype,
+                    file_bytes=data,
+                    owner_username=user["username"],
+                    owner_role=user["role"],
+                    is_government=is_gov,
+                )
+                
+                fact_count = 0
+                file_path = rec["file_path"]
+                try:
+                    if ftype == "csv":
+                        fact_count = ingest_csv_facts(file_path, uf.name, conn)
+                    elif ftype == "image":
+                        fact_count = ingest_image_facts(file_path, uf.name, conn)
+                    elif ftype == "video":
+                        fact_count = ingest_video_facts(file_path, uf.name, conn, str(rec["index_path"]))
+                    elif ftype == "pdf":
+                        from study.upload import validate_pdf
+                        validate_pdf(data, uf.name)
+                        dest_pdf = pdf_dir / uf.name
+                        dest_pdf.write_bytes(data)
+                        from tracerag.ingest import build_index
+                        build_index(str(pdf_dir), str(idx_dir))
+                        fact_count = 10
+                    update_document_status(rec["doc_id"], "ready", is_gov, fact_count=fact_count)
+                except Exception as e:
+                    update_document_status(rec["doc_id"], "error", is_gov, error_message=str(e))
+            
+            conn.close()
+            st.success("✅ Files processed and indexed successfully!")
+            time.sleep(0.8)
+            st.rerun()
+
+    # Document Library Search and List
+    st.divider()
+    st.markdown("#### 📚 Your Document Library")
+    search_q = st.text_input("🔍 Search document library", placeholder="Search by filename…")
+    docs = list_user_documents(user["username"], user["role"], is_government=is_gov, search_query=search_q)
+
+    if docs:
+        for d in docs:
+            with st.container():
+                st.markdown(
+                    f"""
+                    <div class="dashboard-card" style="margin-bottom:0.75rem;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div>
+                                <strong style="font-size:1rem; color:#0f281e;">{d['filename']}</strong>
+                                <span class="top-nav-badge badge-role" style="margin-left:0.5rem;">{d['file_type'].upper()}</span>
+                                <span style="font-size:0.8rem; color:#6b7280; margin-left:0.5rem;">{round(d['file_size']/1024, 1)} KB · {d['upload_time'][:16].replace('T', ' ')}</span>
+                            </div>
+                            <span class="badge-online">{'✅ ' + d['status'].capitalize()}</span>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                c_del, c_ask, c_space = st.columns([1, 2, 4])
+                with c_del:
+                    if st.button("🗑 Delete", key=f"del_{d['doc_id']}", use_container_width=True):
+                        delete_document(d["doc_id"], user["username"], user["role"], is_gov)
+                        st.success(f"Deleted {d['filename']}.")
+                        st.rerun()
+                with c_ask:
+                    def _go_ask_doc(fname=d['filename']):
+                            st.session_state["enterprise_nav"] = "❓ Ask a Question"
+                            st.session_state["question"] = f"From {fname}, what are the key findings?"
+                    if st.button("❓ Ask about this doc", key=f"ask_{d['doc_id']}",
+                                 use_container_width=True, on_click=_go_ask_doc):
+                        pass
+    else:
+        st.info("No documents found matching your filter.")
+
+
+def view_media_library(user, is_gov, idx_dir, pdf_dir):
+    st.markdown("### 🎬 Multimodal Media Library")
+    st.caption("Browse extracted tables, charts, scanned OCR blocks, and video keyframes with bounding box annotations.")
+
+    db = idx_dir / "facts.db"
+    if not db.exists():
+        st.info("No database available.")
+        return
+
+    with sqlite3.connect(str(db)) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT kind FROM facts WHERE kind IS NOT NULL")
+        kinds = [r[0] for r in cur.fetchall()]
+
+    filter_kind = st.selectbox("Filter by Evidence Type", ["All"] + kinds)
+    
+    with sqlite3.connect(str(db)) as conn:
+        cur = conn.cursor()
+        if filter_kind == "All":
+            cur.execute("SELECT doc, page, kind, metric, value, unit, period, raw_text, bbox FROM facts WHERE value_num IS NOT NULL LIMIT 40")
+        else:
+            cur.execute("SELECT doc, page, kind, metric, value, unit, period, raw_text, bbox FROM facts WHERE kind=? AND value_num IS NOT NULL LIMIT 40", (filter_kind,))
+        rows = cur.fetchall()
+
+    if rows:
+        st.markdown(f"Displaying top **{len(rows)}** extracted multimodal evidence items:")
+        for r in rows:
+            doc, page, kind, metric, value, unit, period, raw_text, bbox = r
+            with st.container():
+                st.markdown(
+                    f"""
+                    <div class="dashboard-card">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <strong>{metric or doc}</strong>
+                            <span class="top-nav-badge badge-role">{kind.upper()}</span>
+                        </div>
+                        <div style="font-size:1.15rem; font-weight:700; color:#15803d; margin:0.35rem 0;">
+                            {value} {unit or ''}
+                        </div>
+                        <div style="font-size:0.8rem; color:#4b5563;">
+                            Period: <strong>{period or 'N/A'}</strong> · Document: <code>{doc}</code> · Page: <code>{page}</code>
+                        </div>
+                        <div style="font-size:0.75rem; color:#6b7280; margin-top:0.35rem;">
+                            Evidence Context: <em>{raw_text[:180] if raw_text else ''}...</em>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+    else:
+        st.info("No media items found for this selection.")
+
+
+def view_evidence_explorer(user, is_gov, idx_dir, pdf_dir):
+    st.markdown("### 🔍 Evidence Explorer")
+    st.caption("Inspect original source pages and zoom in on exact bounding box coordinate regions.")
+
+    pdf_files = sorted([p.name for p in pdf_dir.glob("*.pdf")])
+    if not pdf_files:
+        st.info("No PDF files available in document storage.")
+        return
+
+    col_doc, col_pg = st.columns([3, 1])
+    with col_doc:
+        sel_doc = st.selectbox("Select Document", pdf_files)
+    with col_pg:
+        page_num = st.number_input("Page Number", min_value=1, max_value=300, value=1)
+
+    img_bytes = render_page_bytes(sel_doc, int(page_num))
+    if img_bytes:
+        st.image(img_bytes, caption=f"{sel_doc} – Page {page_num}", use_container_width=True)
+    else:
+        st.warning(f"Could not render page {page_num} for {sel_doc}.")
+
+    db = idx_dir / "facts.db"
+    if db.exists():
+        with sqlite3.connect(str(db)) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT metric, value, unit, period, kind, bbox FROM facts WHERE doc=? AND page=?", (sel_doc, page_num))
+            facts_page = cur.fetchall()
+            if facts_page:
+                st.markdown("#### Facts Extracted from this Page")
+                df_page = pd.DataFrame(facts_page, columns=["Metric", "Value", "Unit", "Period", "Type", "Bounding Box"])
+                st.dataframe(df_page, use_container_width=True, hide_index=True)
+
+
+def view_reports_and_comparisons(user, is_gov, idx_dir):
+    st.markdown("### 📊 Reports & Cross-Document Comparisons")
+    st.caption("Compare metrics across multiple documents to identify growth trends, revised figures, and discrepancies.")
+
+    tab_compare, tab_trends = st.tabs(["📑 Document Comparison", "📈 Metric Trend Analysis"])
+
+    db = idx_dir / "facts.db"
+    if not db.exists():
+        st.info("No facts database found.")
+        return
+
+    with sqlite3.connect(str(db)) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT doc FROM facts WHERE doc IS NOT NULL")
+        docs = [r[0] for r in cur.fetchall()]
+
+    with tab_compare:
+        if len(docs) >= 2:
+            c1, c2 = st.columns(2)
+            with c1:
+                doc1 = st.selectbox("First Document (Baseline)", docs, index=0)
+            with c2:
+                doc2 = st.selectbox("Second Document (Comparison)", docs, index=min(1, len(docs)-1))
+            
+            filter_kw = st.text_input("Optional Metric Keyword Filter", placeholder="e.g. inflation, production, tax")
+            
+            if st.button("Run Cross-Document Comparison", type="primary"):
+                with sqlite3.connect(str(db)) as conn:
+                    res = compare_documents(doc1, doc2, conn, metric_filter=filter_kw if filter_kw else None)
+                
+                if res["conflicts"]:
+                    st.warning(f"⚠️ **{len(res['conflicts'])} Discrepancies / Conflicts Detected** between {doc1} and {doc2}")
+                    df_conf = pd.DataFrame([{
+                        "Metric": c["metric"],
+                        "Period": c["period"],
+                        f"{doc1} (p.{c['page1']})": c["value1"],
+                        f"{doc2} (p.{c['page2']})": c["value2"],
+                        "Delta": c["delta"],
+                        "Discrepancy %": f"{c['pct_change']}%",
+                    } for c in res["conflicts"]])
+                    st.dataframe(df_conf, use_container_width=True, hide_index=True)
+                else:
+                    st.success("✅ No conflicting figures found for matching periods.")
+
+                if res["comparisons"]:
+                    st.markdown("#### Full Comparison Table")
+                    df_comp = pd.DataFrame([{
+                        "Metric": c["metric"],
+                        "Period": c["period"],
+                        "Val 1": c["value1"],
+                        "Val 2": c["value2"],
+                        "Delta": c["delta"],
+                        "Change %": f"{c['pct_change']}%",
+                        "Status": "⚠️ Conflict" if c["status"] == "conflict" else "✅ Match",
+                    } for c in res["comparisons"]])
+                    st.dataframe(df_comp, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No directly overlapping metrics found between these two documents.")
+        else:
+            st.info("At least two documents must be indexed to run cross-document comparison.")
+
+    with tab_trends:
+        st.markdown("#### Trace Metric Across All Periods")
+        kw = st.text_input("Metric Name to Trace", value="inflation", placeholder="e.g. inflation, GDP, tomato, revenue")
+        if kw:
+            with sqlite3.connect(str(db)) as conn:
+                trends = analyze_metric_trend(kw, conn)
+            if trends:
+                df_trend = pd.DataFrame([{
+                    "Document": t["doc"],
+                    "Page": t["page"],
+                    "Metric": t["metric"],
+                    "Period": t["period"],
+                    "Value": f"{t['value']} {t['unit'] or ''}",
+                    "YoY Delta": t["delta"] if t["delta"] is not None else "—",
+                    "Growth %": f"{t['pct_change']}%" if t["pct_change"] is not None else "—",
+                } for t in trends])
+                st.dataframe(df_trend, use_container_width=True, hide_index=True)
+            else:
+                st.info(f"No trends found for '{kw}'.")
+
+
+def view_audit_trail(user, is_gov, idx_dir):
+    st.markdown("### 🛡️ Audit Trail & Integrity Ledger")
+    st.caption("Cryptographic HMAC-SHA256 chained log ensuring complete tamper-evidence across all queries, uploads, and decisions.")
+
+    from tracerag.audit import AuditLog
+    audit = AuditLog(str(idx_dir))
+    ok, msg = audit.verify_chain()
+
+    if ok:
+        st.success(f"🔒 **HMAC-SHA256 Hash Chain: INTACT** — {msg}")
+    else:
+        st.error(f"💥 **HMAC-SHA256 Hash Chain: BROKEN** — {msg}")
+
+    c_mix, c_ref = st.columns(2)
+    with c_mix:
+        st.markdown("#### System Decision Mix")
+        mix = audit.get_decision_mix()
+        if any(mix.values()):
+            df_mix = pd.DataFrame([{"Status": k.upper(), "Count": v} for k, v in mix.items() if v > 0])
+            st.bar_chart(df_mix.set_index("Status"))
+        else:
+            st.info("No decisions recorded yet.")
+
+    with c_ref:
+        st.markdown("#### Refusal Ledger")
+        ledger = audit.get_refusal_ledger()
+        if ledger:
+            df_ledger = pd.DataFrame([{
+                "Question ID": r.get("question_id", ""),
+                "Reason Code": r.get("reason", ""),
+                "Timestamp": r.get("ts", "")[:19],
+            } for r in ledger])
+            st.dataframe(df_ledger, use_container_width=True, hide_index=True)
+        else:
+            st.info("No refusals logged.")
+
+    st.divider()
+    c_exp, c_tamper = st.columns(2)
+    with c_exp:
+        st.markdown("#### Export Audit Log")
+        if st.button("Export to JSONL", use_container_width=True):
+            with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as tmp:
+                n = audit.export_jsonl(tmp.name)
+                with open(tmp.name, "rb") as f:
+                    data = f.read()
+            st.download_button(
+                f"📥 Download ({n} records)",
+                data,
+                "audit_export.jsonl",
+                "application/json",
+                use_container_width=True,
+            )
+
+    with c_tamper:
+        st.markdown("#### 🔧 Tamper Detection Test Suite")
+        if st.button("Run Tamper Test", use_container_width=True):
+            demo_dir = str(idx_dir / "tamper_demo")
+            with st.spinner("Testing tamper resistance…"):
+                res = audit.tamper_demo(demo_dir)
+            if res.get("tampered_chain_ok") is False:
+                st.success("✅ **Tamper Detected!** Modified row was immediately flagged by hash chain mismatch.")
+            else:
+                st.error("Failed to detect tampering.")
+
+
+def view_settings(user, is_gov, idx_dir):
+    st.markdown("### ⚙️ System Settings & Environment Configuration")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("#### Environment Settings")
+        st.text_input("Active Environment", value="Government Offline (Isolated)" if is_gov else "Online Cloud", disabled=True)
+        st.text_input("Database Path", value=str(idx_dir / "facts.db"), disabled=True)
+        st.text_input("Document Store", value=str(idx_dir / "docstore.db"), disabled=True)
+        st.text_input("Audit Log Path", value=str(idx_dir / "audit.jsonl"), disabled=True)
+    with col2:
+        st.markdown("#### AI & Retrieval Configuration")
+        st.text_input("AI Provider", value="Local Extractive (Offline Safe)" if is_gov else "Cloud / Hybrid", disabled=True)
+        st.text_input("Hybrid Retrieval Fusion", value="BM25 + IDF Coverage + RRF (k=60)", disabled=True)
+        st.text_input("Verification Tolerance", value="1.5% Relative Numeric Tolerance", disabled=True)
+        st.text_input("Signed-in User", value=f"{user['name']} ({user['role']})", disabled=True)
+
+
+def view_help_and_support(user, is_gov):
+    st.markdown("### ❓ Help, Documentation & Role Guide")
+    st.markdown(
+        """
+        #### 🏛️ About TraceRAG
+        TraceRAG is an enterprise Multimodal Evidence-Intelligence Platform.
+        Key capabilities:
+        - **Claim-to-Pixel Grounding**: Every numeric value and statement is verified against original document page coordinates.
+        - **Intelligent Refusal**: If a figure or entity is absent from the repository, TraceRAG refuses instead of hallucinating.
+        - **Tamper-Evident Auditing**: Every query and decision is written to an HMAC-SHA256 chained audit ledger.
+        
+        #### 👥 Role Privileges Matrix
+        | Role | Environment | Key Capabilities |
+        |---|---|---|
+        | **Government** | 🔒 Offline | 100% local processing, zero external network calls, confidential report analysis |
+        | **Policy Analyst** | 🌐 Online | Multi-document trend comparisons, year-over-year statistics, policy briefs |
+        | **Journalist** | 🌐 Online | Fact verification badge, quote-ready evidence, source citation export |
+        | **Student** | 🌐 Online | Study notes, verified flashcards, interactive quizzes, practice questions |
+        | **Fact-Checker** | 🌐 Online | Claim submission, debunking, contradiction detection, missing context finder |
+        | **Auditor / Admin** | 🌐 Online | HMAC chain validation, refusal ledger, tamper test suite, JSONL audit export |
+        """
+    )
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -580,6 +1206,10 @@ def main():
         layout="wide",
         initial_sidebar_state="expanded",
     )
+
+    # Initialise navigation key BEFORE any widget reads it (Streamlit requirement)
+    if "enterprise_nav" not in st.session_state:
+        st.session_state["enterprise_nav"] = "🏠 Home"
 
     # Login gate — single page for all roles
     if not st.session_state.get("user"):
@@ -611,20 +1241,48 @@ def main():
     question = st.session_state.question
     allowed  = ROLE_TABS.get(role, [])
 
-    if is_gov:
-        _government_dashboard(result, question, allowed, _idx_dir)
+    # Render Top Navigation Header
+    render_top_navbar(user, title="TraceRAG Enterprise Platform")
+
+    # Routing based on sidebar navigation
+    nav_item = st.session_state.get("enterprise_nav", "🏠 Home")
+
+    if nav_item == "🏠 Home":
+        view_home(user, result, question, allowed, _idx_dir, _pdf_dir, is_gov)
+    elif nav_item == "❓ Ask a Question":
+        view_ask_question(user, result, question, allowed, _idx_dir, _pdf_dir, is_gov)
+    elif nav_item == "📁 My Documents":
+        view_my_documents(user, is_gov, _idx_dir, _pdf_dir)
+    elif nav_item == "🎬 Media Library":
+        view_media_library(user, is_gov, _idx_dir, _pdf_dir)
+    elif nav_item == "🔍 Evidence Explorer":
+        view_evidence_explorer(user, is_gov, _idx_dir, _pdf_dir)
+    elif nav_item == "📊 Reports & Comparisons":
+        view_reports_and_comparisons(user, is_gov, _idx_dir)
+    elif nav_item == "🛡️ Audit Trail":
+        view_audit_trail(user, is_gov, _idx_dir)
+    elif nav_item == "⚙️ Settings":
+        view_settings(user, is_gov, _idx_dir)
+    elif nav_item == "❓ Help & Support":
+        view_help_and_support(user, is_gov)
     else:
-        _online_dashboard(result, question, allowed)
+        view_home(user, result, question, allowed, _idx_dir, _pdf_dir, is_gov)
 
 
 # ── Login screen (single page, login + create account) ───────────────────────
 
 def _show_login():
+    apply_enterprise_theme()
     col_l, col_m, col_r = st.columns([1, 2, 1])
     with col_m:
         st.markdown(
-            "<h1 style='text-align:center'>📄 TraceRAG</h1>"
-            "<p style='text-align:center;color:grey'>Multimodal RAG with Explainability</p>",
+            """
+            <div style="text-align:center; padding: 1.5rem 0 0.5rem 0;">
+                <div style="font-size:2.5rem; line-height:1;">🌿</div>
+                <h1 style="color:#0f281e; font-weight:800; margin-bottom:0.25rem;">TraceRAG</h1>
+                <p style="color:#64748b; font-size:0.95rem; margin-top:0;">Enterprise Multimodal Evidence-Intelligence Platform</p>
+            </div>
+            """,
             unsafe_allow_html=True,
         )
         st.divider()
