@@ -1,0 +1,39 @@
+{
+  "total": 10,
+  "answer_accuracy": 1.0,
+  "page_accuracy": 0.6,
+  "status_accuracy": 0.9,
+  "weighted_score": 0.87,
+  "by_type": {
+    "refuse": {
+      "total": 2,
+      "ans_acc": 1.0,
+      "pg_acc": 0.0,
+      "st_acc": 1.0
+    },
+    "chart_table": {
+      "total": 3,
+      "ans_acc": 1.0,
+      "pg_acc": 1.0,
+      "st_acc": 1.0
+    },
+    "text": {
+      "total": 3,
+      "ans_acc": 1.0,
+      "pg_acc": 1.0,
+      "st_acc": 1.0
+    },
+    "two_doc": {
+      "total": 1,
+      "ans_acc": 1.0,
+      "pg_acc": 0.0,
+      "st_acc": 1.0
+    },
+    "conflict": {
+      "total": 1,
+      "ans_acc": 1.0,
+      "pg_acc": 0.0,
+      "st_acc": 0.0
+    }
+  }
+}

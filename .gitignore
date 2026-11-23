@@ -26,8 +26,14 @@ data/index/tamper_demo/
 # Keep manifest and eval report (small, useful for CI)
 !data/index/manifest.json
 
-# Outputs – predictions are generated, not source
-outputs/
+# Outputs – track key deliverables, ignore large generated files
+outputs/predictions.jsonl
+outputs/predictions.strict.jsonl
+!outputs/predictions.jsonl
+!outputs/predictions.strict.jsonl
+!outputs/eval_report.json
+!outputs/demo_answers.jsonl
+outputs/audit_export.jsonl
 
 # OS
 .DS_Store

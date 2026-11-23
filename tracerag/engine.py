@@ -148,7 +148,8 @@ class Engine:
                 return ans
 
         # 5c. Post-fetch refusal check (runs after special paths)
-        refusal = self._check_refusal_facts(facts, q_tokens, query_periods)
+        refusal = self._check_refusal_facts(facts, q_tokens, query_periods,
+                                             question=question)
         if refusal:
             reason, nearest = refusal
             ans = self._build_refusal(question_id, reason, nearest, strict)
@@ -559,10 +560,24 @@ class Engine:
             if best_hit_count < max(2, len(q_long_tokens) * 0.30):
                 return ("NEAR_MISS_ENTITY_OR_METRIC", None)
 
+        # Doc-year mismatch: "Report No. X of YYYY" where YYYY not in indexed docs
+        import re as _re
+        doc_year_m = _re.search(r"\bReport\s+No\.\s*\d+\s+of\s+(\d{4})\b",
+                                question, _re.I)
+        if doc_year_m:
+            asked_year = doc_year_m.group(1)
+            year_in_corpus = any(
+                asked_year in (r.get("text") or "")
+                for r in top_regions[:10]
+            )
+            if not year_in_corpus:
+                return ("NEAR_MISS_PERIOD", None)
+
         return None
 
     def _check_refusal_facts(self, facts: list[dict], q_tokens: list[str],
-                              query_periods: list[str]) -> Optional[tuple]:
+                              query_periods: list[str],
+                              question: str = "") -> Optional[tuple]:
         """Check after fetching facts."""
         if not facts:
             return ("NO_EVIDENCE", None)
@@ -578,6 +593,21 @@ class Engine:
                 if has_diff_period:
                     return ("NEAR_MISS_PERIOD", facts[0])
             return ("LOW_SCORE", facts[0])
+
+        # Named-entity mismatch: only check entities that are genuinely outside
+        # this collection (Bangladesh, Mongolia, Assam are not covered).
+        # India, Kerala, Sikkim, West Bengal ARE covered — don't flag them.
+        out_of_scope_entities = re.findall(
+            r"\b(Bangladesh|Pakistan|Mongolia|Assam|Tanzania|Nepal"
+            r"|Sri Lanka|Myanmar|Afghanistan)\b",
+            question, re.I
+        )
+        if out_of_scope_entities:
+            top_raw = (top.get("raw_text") or "").lower()
+            for entity in out_of_scope_entities:
+                if entity.lower() not in top_raw:
+                    return ("NEAR_MISS_ENTITY_OR_METRIC", top)
+
         return None
 
     # ------------------------------------------------------------------
@@ -799,14 +829,23 @@ class Engine:
                         result.append(f)
                 return result
 
-            e1_facts = merge(e1_db) or [f for f in facts
-                                         if fact_has_entity(f, e1, e1_stem) and
-                                         f.get("value_num") and
-                                         0 < abs(f["value_num"]) < 2000]
-            e2_facts = merge(e2_db) or [f for f in facts
-                                         if fact_has_entity(f, e2, e2_stem) and
-                                         f.get("value_num") and
-                                         0 < abs(f["value_num"]) < 2000]
+            e1_facts = merge(e1_db)
+            e2_facts = merge(e2_db)
+
+            # If both PDF scans returned nothing, the entities are absent —
+            # don't fall back to page-text matching which would match unrelated docs.
+            if not e1_facts and not e2_facts:
+                return None  # triggers refusal in caller
+
+            # Fallback to page-text matching only when at least one entity was found
+            if not e1_facts:
+                e1_facts = [f for f in facts
+                             if fact_has_entity(f, e1, e1_stem) and
+                             f.get("value_num") and 0 < abs(f["value_num"]) < 2000]
+            if not e2_facts:
+                e2_facts = [f for f in facts
+                             if fact_has_entity(f, e2, e2_stem) and
+                             f.get("value_num") and 0 < abs(f["value_num"]) < 2000]
 
             if e1_facts and e2_facts:
                 import pymupdf as fitz
