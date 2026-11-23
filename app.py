@@ -581,173 +581,186 @@ def main():
         initial_sidebar_state="expanded",
     )
 
-    # ── Login gate ────────────────────────────────────────────────────────────
+    # Login gate — single page for all roles
     if not st.session_state.get("user"):
         _show_login()
         return
 
-    user = st.session_state["user"]
-    role = user["role"]
+    user   = st.session_state["user"]
+    role   = user["role"]
+    is_gov = user.get("offline", False)   # True only for government role
 
-    # Backend authorization re-check on every render
-    if role == "government" and not is_government_mode():
-        st.error("Session invalid: government role requires offline mode.")
-        del st.session_state["user"]
-        st.rerun()
-        return
-    if role != "government" and is_government_mode():
-        st.error("Session invalid: only government role permitted in offline mode.")
-        del st.session_state["user"]
-        st.rerun()
-        return
+    # Paths are scoped to the user's environment
+    _idx_dir = ROOT / "data" / "gov_index" if is_gov else ROOT / "data" / "index"
+    _pdf_dir = ROOT / "data" / "gov_pdfs"  if is_gov else ROOT / "data" / "raw" / "pdfs"
 
     q_text, run, strict = sidebar()
 
-    # Persistent result in session state
-    if "result" not in st.session_state:
-        st.session_state.result = None
-    if "question" not in st.session_state:
-        st.session_state.question = ""
+    if "result"   not in st.session_state: st.session_state.result   = None
+    if "question" not in st.session_state: st.session_state.question = ""
 
     if run and q_text:
         with st.spinner("Searching documents…"):
-            st.session_state.result   = ask(q_text, strict=strict)
+            from tracerag.engine import Engine
+            _eng = Engine(str(_idx_dir), str(_pdf_dir))
+            qid  = f"ui_{int(time.time()*1000)}"
+            st.session_state.result   = _eng.answer(qid, q_text, strict=strict)
             st.session_state.question = q_text
 
     result   = st.session_state.result
     question = st.session_state.question
+    allowed  = ROLE_TABS.get(role, [])
 
-    # ── Allowed tabs for this role ────────────────────────────────────────────
-    allowed = ROLE_TABS.get(role, [])
-
-    # ── Government dashboard ──────────────────────────────────────────────────
-    if role == "government":
-        _government_dashboard(result, question, allowed, strict)
-        return
-
-    # ── Online dashboard (all other roles) ───────────────────────────────────
-    _online_dashboard(result, question, role, allowed, strict)
+    if is_gov:
+        _government_dashboard(result, question, allowed, _idx_dir)
+    else:
+        _online_dashboard(result, question, allowed)
 
 
-# ── Login screen ─────────────────────────────────────────────────────────────
+# ── Login screen (single page, login + create account) ───────────────────────
 
 def _show_login():
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.title("🔐 TraceRAG Login")
+    col_l, col_m, col_r = st.columns([1, 2, 1])
+    with col_m:
+        st.markdown(
+            "<h1 style='text-align:center'>📄 TraceRAG</h1>"
+            "<p style='text-align:center;color:grey'>Multimodal RAG with Explainability</p>",
+            unsafe_allow_html=True,
+        )
+        st.divider()
 
-        env = get_mode_label()
-        if is_government_mode():
-            st.error(f"**{env}**")
-            st.caption("Government offline mode active. Only government accounts permitted.")
-        else:
-            st.info(f"**{env}**")
+        tab_login, tab_register = st.tabs(["🔐 Sign In", "📝 Create Account"])
 
-        with st.form("login_form"):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Login", use_container_width=True)
+        # ── Sign In tab ───────────────────────────────────────────────────────
+        with tab_login:
+            with st.form("login_form"):
+                username  = st.text_input("Username", placeholder="your-username")
+                password  = st.text_input("Password", type="password",
+                                           placeholder="your-password")
+                submitted = st.form_submit_button("Login →",
+                                                   use_container_width=True,
+                                                   type="primary")
+            if submitted:
+                if not username or not password:
+                    st.warning("Enter both username and password.")
+                else:
+                    try:
+                        user = authenticate(username, password)
+                        st.session_state["user"] = user
+                        env_label = "🔒 Government Offline" if user["offline"] else "🌐 Online"
+                        ri = get_role_info(user["role"])
+                        st.success(
+                            f"{ri['icon']} Welcome **{user['name']}** — "
+                            f"entering **{env_label}** environment."
+                        )
+                        time.sleep(0.8)
+                        st.rerun()
+                    except AuthError as e:
+                        st.error(f"❌ {e}")
 
-        if submitted:
-            try:
-                user = authenticate(username, password)
-                st.session_state["user"] = user
-                st.success(f"Welcome, {user['name']}!")
-                st.rerun()
-            except AuthError as e:
-                st.error(str(e))
-
-        # Show available accounts for this environment (demo only)
-        with st.expander("Demo accounts"):
-            if is_government_mode():
-                st.markdown("| Username | Password | Role |\n|---|---|---|\n"
-                            "| `government` | `gov-secure-2024` | Government |")
-            else:
+            with st.expander("👥 Demo accounts"):
                 st.markdown(
-                    "| Username | Password | Role |\n|---|---|---|\n"
-                    "| `analyst` | `analyst-pass` | Policy Analyst |\n"
-                    "| `journalist` | `press-pass` | Journalist |\n"
-                    "| `student` | `learn-2024` | Student |\n"
-                    "| `checker` | `verify-pass` | Fact-Checker |\n"
-                    "| `auditor` | `audit-admin` | Auditor / Admin |"
+                    "| Username | Password | Role | Env |\n"
+                    "|---|---|---|---|\n"
+                    "| `government` | `gov-secure-2024` | Government | 🔒 Offline |\n"
+                    "| `analyst` | `analyst-pass` | Policy Analyst | 🌐 Online |\n"
+                    "| `journalist` | `press-pass` | Journalist | 🌐 Online |\n"
+                    "| `student` | `learn-2024` | Student | 🌐 Online |\n"
+                    "| `checker` | `verify-pass` | Fact-Checker | 🌐 Online |\n"
+                    "| `auditor` | `audit-admin` | Auditor / Admin | 🌐 Online |"
                 )
 
+        # ── Create Account tab ────────────────────────────────────────────────
+        with tab_register:
+            st.info("Government accounts must be provisioned by an administrator.")
+            with st.form("register_form"):
+                reg_name  = st.text_input("Full Name", placeholder="Your Name")
+                reg_user  = st.text_input("Username",  placeholder="choose-a-username")
+                reg_pass  = st.text_input("Password",  type="password",
+                                           placeholder="at least 6 characters")
+                reg_pass2 = st.text_input("Confirm Password", type="password")
+                reg_role  = st.selectbox("Role", [
+                    "student", "analyst", "journalist", "factchecker"
+                ], format_func=lambda r: {
+                    "student":     "🎓 Student",
+                    "analyst":     "📊 Policy Analyst",
+                    "journalist":  "📰 Journalist",
+                    "factchecker": "🔍 Fact-Checker",
+                }.get(r, r))
+                reg_btn = st.form_submit_button("Create Account →",
+                                                 use_container_width=True,
+                                                 type="primary")
+            if reg_btn:
+                if reg_pass != reg_pass2:
+                    st.error("Passwords do not match.")
+                else:
+                    try:
+                        from auth import create_account
+                        user = create_account(reg_user, reg_pass, reg_name, reg_role)
+                        st.session_state["user"] = user
+                        st.success(
+                            f"✅ Account created! Welcome **{user['name']}**. "
+                            "Logging you in…"
+                        )
+                        time.sleep(0.8)
+                        st.rerun()
+                    except AuthError as e:
+                        st.error(f"❌ {e}")
 
-# ── Government offline dashboard ─────────────────────────────────────────────
 
-def _government_dashboard(result, question, allowed, strict):
-    """
-    Government users get a dedicated offline dashboard.
-    Student study tabs disabled (no external uploads in gov mode).
-    Local model status and DB status shown prominently.
-    """
+# ── Government offline dashboard ──────────────────────────────────────────────
+
+def _government_dashboard(result, question, allowed, idx_dir):
+    """Offline dashboard for government role — local pipelines only."""
     # Status bar
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Environment", "🔒 Offline")
-    col2.metric("AI Provider", "Local")
-    col3.metric("Database",    "Local SQLite")
-
-    # Audit chain status
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Environment", "🔒 Offline")
+    c2.metric("AI",          "Local only")
+    c3.metric("Database",    "Local SQLite")
     try:
         from tracerag.audit import AuditLog
-        audit  = AuditLog(str(INDEX_DIR))
-        ok, _  = audit.verify_chain()
-        col4.metric("Audit Chain", "✅ Intact" if ok else "❌ Broken")
+        ok, _ = AuditLog(str(idx_dir)).verify_chain()
+        c4.metric("Audit Chain", "✅ Intact" if ok else "❌ Broken")
     except Exception:
-        col4.metric("Audit Chain", "⚠️ Unavailable")
-
+        c4.metric("Audit Chain", "⚠️ N/A")
     st.divider()
 
-    # Only show allowed tabs for government role
-    tab_names = [t for t in ["📊 Analyst", "🔍 Fact-checker", "🔐 Auditor"]
-                 if t in allowed]
-    if not tab_names:
-        st.warning("No tabs authorised for this role.")
-        return
-
-    tabs = st.tabs(tab_names)
-    for tab, name in zip(tabs, tab_names):
-        with tab:
-            if name == "📊 Analyst":
-                if result:
-                    lens_analyst(result, question)
-                else:
-                    st.info("Ask a question using the sidebar.")
-            elif name == "🔍 Fact-checker":
-                lens_factchecker()
-            elif name == "🔐 Auditor":
-                lens_auditor()
-
-
-# ── Online dashboard (all non-government roles) ───────────────────────────────
-
-def _online_dashboard(result, question, role, allowed, strict):
-    # All tabs mapped by name
     all_tab_defs = {
-        "📊 Analyst":    lambda: lens_analyst(result, question) if result else st.info("Ask a question."),
-        "📰 Journalist": lambda: lens_journalist(result, question) if result else st.info("Ask a question."),
-        "🎓 Student":    lambda: lens_student(result, question) if result else st.info("Ask a question."),
+        "📊 Analyst":      lambda: lens_analyst(result, question) if result else st.info("Ask a question via the sidebar."),
         "🔍 Fact-checker": lens_factchecker,
-        "🔐 Auditor":    lens_auditor,
-        "📤 Upload":     study_tab_upload,
-        "📝 Summary":    study_tab_summary,
-        "🃏 Flashcards": study_tab_flashcards,
-        "🧠 Quiz":       study_tab_quiz,
-        "▶️ Videos":     study_tab_videos,
-        "❓ Ask":        study_tab_ask,
-        "📈 Progress":   study_tab_progress,
+        "🔐 Auditor":      lens_auditor,
+        "📚 My PDFs":      study_tab_my_pdfs,
     }
-
     tab_names = [t for t in allowed if t in all_tab_defs]
-    if not tab_names:
-        st.warning("No tabs authorised for this role.")
-        return
-
     tabs = st.tabs(tab_names)
     for tab, name in zip(tabs, tab_names):
         with tab:
-            fn = all_tab_defs[name]
-            fn()
+            all_tab_defs[name]()
+
+
+# ── Online dashboard ──────────────────────────────────────────────────────────
+
+def _online_dashboard(result, question, allowed):
+    all_tab_defs = {
+        "📊 Analyst":      lambda: lens_analyst(result, question) if result else st.info("Ask a question."),
+        "📰 Journalist":   lambda: lens_journalist(result, question) if result else st.info("Ask a question."),
+        "🎓 Student":      lambda: lens_student(result, question) if result else st.info("Ask a question."),
+        "🔍 Fact-checker": lens_factchecker,
+        "🔐 Auditor":      lens_auditor,
+        "📤 Upload":       study_tab_upload,
+        "📝 Summary":      study_tab_summary,
+        "🃏 Flashcards":   study_tab_flashcards,
+        "🧠 Quiz":         study_tab_quiz,
+        "▶️ Videos":       study_tab_videos,
+        "❓ Ask":          study_tab_ask,
+        "📈 Progress":     study_tab_progress,
+        "📚 My PDFs":      study_tab_my_pdfs,
+    }
+    tab_names = [t for t in allowed if t in all_tab_defs]
+    tabs = st.tabs(tab_names)
+    for tab, name in zip(tabs, tab_names):
+        with tab:
+            all_tab_defs[name]()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1290,6 +1303,257 @@ def study_tab_progress():
     if st.button("🔄 Advance session (new study round)"):
         deck.advance_session()
         st.success(f"Session {deck.session} started.")
+
+
+
+# ── Universal PDF upload + Knowledge Q&A tab (all roles) ──────────────────────
+
+def study_tab_my_pdfs():
+    """
+    Available to ALL roles (including Government offline).
+    Upload your own PDF → get topic summary → ask questions from it.
+    Government mode: fully local, no external calls.
+    """
+    _study_session_state()
+
+    user   = st.session_state.get("user", {})
+    is_gov = user.get("offline", False)
+
+    st.subheader("📚 My PDFs — Upload & Ask")
+    if is_gov:
+        st.info("🔒 Government mode: processing is fully local. No data leaves this machine.")
+    else:
+        st.info("🌐 Online mode: your PDF is processed locally in a private session.")
+
+    from study.upload import (
+        new_session_id, session_dirs, validate_pdf, save_upload,
+        ingest_session_pdf, sha256_of, log_upload, delete_session,
+        cleanup_expired_sessions, get_ocr_stats, UploadError,
+        MAX_UPLOAD_MB, MAX_PAGES,
+    )
+
+    cleanup_expired_sessions()
+
+    st.caption(f"Max {MAX_UPLOAD_MB} MB · Max {MAX_PAGES} pages · PDF only")
+
+    # Upload widget
+    uploaded_files = st.file_uploader(
+        "Drop your PDF here",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key="my_pdfs_uploader",
+    )
+
+    col_proc, col_del = st.columns([3, 1])
+    with col_proc:
+        process = st.button("📥 Process PDF", type="primary",
+                             use_container_width=True,
+                             disabled=not uploaded_files)
+    with col_del:
+        can_del = bool(st.session_state.get("study_session_id"))
+        if st.button("🗑 Delete files", use_container_width=True, disabled=not can_del):
+            delete_session(st.session_state["study_session_id"])
+            for k in list(st.session_state.keys()):
+                if k.startswith("study_"):
+                    del st.session_state[k]
+            _study_session_state()
+            st.success("Files deleted.")
+            st.rerun()
+
+    if process and uploaded_files:
+        sid  = new_session_id()
+        dirs = session_dirs(sid)
+        prog = st.progress(0.0, text="Validating…")
+        errors, saved = [], []
+
+        for i, uf in enumerate(uploaded_files):
+            prog.progress((i / len(uploaded_files)) * 0.3,
+                          text=f"Validating {uf.name}…")
+            data = uf.read()
+            try:
+                validate_pdf(data, uf.name)
+                save_upload(sid, uf.name, data)
+                log_upload(sid, uf.name, sha256_of(data), str(dirs["index"]))
+                saved.append(uf.name)
+            except UploadError as e:
+                errors.append(f"**{uf.name}**: {e}")
+
+        for err in errors:
+            st.error(err)
+
+        if saved:
+            prog.progress(0.4, text="Indexing…")
+            try:
+                ingest_session_pdf(sid, saved[0])
+            except Exception as e:
+                st.error(f"Indexing failed: {e}")
+                return
+
+            prog.progress(0.75, text="Building topics…")
+            from study.topics import extract_topics
+            from study.summarise import summarise_topic
+            from study.flashcards import generate_cards
+            from study.leitner import LeitnerDeck
+
+            topics, summaries, all_cards = [], {}, []
+            for fname in saved:
+                pdf_path  = str(dirs["pdfs"] / fname)
+                reg_jsonl = str(dirs["index"] / "regions.jsonl")
+                t = extract_topics(pdf_path, reg_jsonl)
+                topics.extend(t)
+                for topic in t:
+                    s = summarise_topic(topic, str(dirs["index"]), fname)
+                    summaries[topic["id"]] = s
+                    cards = generate_cards(topic, s, str(dirs["index"]),
+                                           fname, pdf_path)
+                    all_cards.extend(cards)
+
+            st.session_state.study_session_id = sid
+            st.session_state.study_dirs       = dirs
+            st.session_state.study_topics     = topics
+            st.session_state.study_summaries  = summaries
+            st.session_state.study_cards      = all_cards
+            st.session_state.study_leitner    = LeitnerDeck(all_cards)
+            st.session_state.study_pdf_names  = saved
+            prog.progress(1.0, text="Done!")
+            st.success(f"✅ {len(saved)} file(s) · {len(topics)} topics · {len(all_cards)} cards")
+
+            # OCR warning
+            for doc, stats in get_ocr_stats(sid).items():
+                if stats["mean_confidence"] < 0.80:
+                    st.warning(
+                        f"⚠️ **{doc}** is scanned. "
+                        f"OCR confidence: {stats['mean_confidence']:.0%}. "
+                        f"Low-confidence pages: {stats['low_pages'] or 'none'}"
+                    )
+
+    # ── If PDFs are already loaded, show summary + Q&A ────────────────────────
+    topics   = st.session_state.get("study_topics", [])
+    summaries= st.session_state.get("study_summaries", {})
+    dirs     = st.session_state.get("study_dirs")
+
+    if not topics:
+        st.info("Upload a PDF above to get started.")
+        return
+
+    st.divider()
+    st.subheader("📋 Topics & Summary")
+
+    topic_titles = [t["title"] for t in topics]
+    sel_title    = st.selectbox("Select a topic", topic_titles,
+                                key="my_pdfs_topic_sel")
+    sel_topic    = next(t for t in topics if t["title"] == sel_title)
+    s            = summaries.get(sel_topic["id"], {})
+
+    st.caption(f"Pages {sel_topic['page_start']} – {sel_topic['page_end']}")
+
+    for b in s.get("bullets", []):
+        col_txt, col_src = st.columns([11, 1])
+        with col_txt:
+            st.markdown(f"• {b['text']}")
+        with col_src:
+            if st.button("🔍", key=f"mypdf_src_{b.get('page')}_{b['text'][:8]}",
+                         help="View source page"):
+                if dirs and b.get("doc") and b.get("page"):
+                    pdf_path = dirs["pdfs"] / b["doc"]
+                    if pdf_path.exists():
+                        img = render_page_bytes(str(pdf_path), b["page"],
+                                                b.get("bbox"), dpi=120)
+                        if img:
+                            st.image(img, use_container_width=True)
+
+    if s.get("key_numbers"):
+        with st.expander("🔢 Key Numbers"):
+            st.dataframe([{
+                "Value": n["value"], "Unit": n["unit"],
+                "Period": n["period"], "Page": n["page"],
+            } for n in s["key_numbers"]], use_container_width=True)
+
+    # ── Knowledge Q&A from the uploaded PDF ──────────────────────────────────
+    st.divider()
+    st.subheader("❓ Ask Questions from Your PDF")
+    st.caption("Questions are answered using only the content of your uploaded PDF.")
+
+    q_input = st.text_input("Type your question", placeholder="e.g. What is the main conclusion?",
+                             key="my_pdfs_question")
+    ask_btn = st.button("Ask ▶", key="my_pdfs_ask_btn", type="primary")
+
+    if ask_btn and q_input.strip() and dirs:
+        from tracerag.engine import Engine
+        session_engine = Engine(str(dirs["index"]), str(dirs["pdfs"]))
+        with st.spinner("Searching your document…"):
+            result = session_engine.answer(
+                f"mypdf_{int(time.time()*1000)}", q_input.strip()
+            )
+
+        status = result.get("status", "")
+        answer = result.get("answer", "")
+
+        if status == "refuse":
+            reason = ", ".join(result.get("reason_codes", ["unknown"]))
+            st.warning(f"🔴 Not found in your PDF. Reason: `{reason}`")
+            st.warning(f"⚠️ Conflicting values: **{answer}**")
+        else:
+            st.success(f"**Answer:** {answer}")
+
+        # Show source page with highlight
+        docs  = result.get("doc")
+        pages = result.get("page")
+        bbox  = result.get("bbox")
+        if isinstance(docs,  list): docs  = docs[0]  if docs  else None
+        if isinstance(pages, list): pages = pages[0] if pages else None
+        if isinstance(bbox, str):
+            try: bbox = json.loads(bbox)
+            except: bbox = None
+
+        if docs and pages and dirs:
+            pdf_path = dirs["pdfs"] / docs
+            if pdf_path.exists():
+                st.caption(f"Source: **{docs}** · Page **{pages}**")
+                img = render_page_bytes(str(pdf_path), pages, bbox, dpi=130)
+                if img:
+                    st.image(img, caption=f"Page {pages}", use_container_width=True)
+
+        receipt = result.get("audit_receipt", "")
+        if receipt:
+            st.caption(f"Receipt: `{receipt}`")
+
+    # ── Flashcards from this PDF ──────────────────────────────────────────────
+    all_cards = st.session_state.get("study_cards", [])
+    if all_cards:
+        st.divider()
+        st.subheader("🃏 Flashcards from This PDF")
+        st.caption(f"{len(all_cards)} cards generated. Flip to see answers.")
+
+        # Show top 5 for this topic
+        topic_cards = [c for c in all_cards
+                       if c.get("topic_id") == sel_topic["id"]][:5]
+
+        for card in topic_cards:
+            with st.container(border=True):
+                col_q, col_flip = st.columns([9, 1])
+                with col_q:
+                    st.markdown(f"**{card['front']}**")
+                    st.caption(f"{card.get('type','')} · p.{card.get('page','?')}")
+                with col_flip:
+                    flipped = st.session_state.study_flip.get(card["id"], False)
+                    if st.button("👁" if not flipped else "↩",
+                                 key=f"mypdf_flip_{card['id']}"):
+                        st.session_state.study_flip[card["id"]] = not flipped
+                        st.rerun()
+                if st.session_state.study_flip.get(card["id"]):
+                    st.success(f"**Answer:** {card['back']}")
+                    if not card.get("verified"):
+                        st.warning("⚠️ Could not verify this number in source.")
+
+        from study.export import to_csv, to_anki_tsv
+        ec1, ec2 = st.columns(2)
+        with ec1:
+            st.download_button("⬇ CSV", to_csv(all_cards),
+                               "my_cards.csv", "text/csv")
+        with ec2:
+            st.download_button("⬇ Anki TSV", to_anki_tsv(all_cards),
+                               "my_cards.tsv", "text/tab-separated-values")
 
 
 if __name__ == "__main__":

@@ -25,10 +25,25 @@ ROOT = Path(__file__).parent
 
 def is_government_mode() -> bool:
     """
-    Returns True when GOVERNMENT_MODE=offline.
-    Any other value (including unset) means online mode.
+    Returns True when:
+      - GOVERNMENT_MODE=offline env var is set, OR
+      - The current Streamlit session has a government user logged in.
+    This allows a single login page — the role itself activates offline mode.
     """
-    return os.environ.get("GOVERNMENT_MODE", "").strip().lower() == "offline"
+    if os.environ.get("GOVERNMENT_MODE", "").strip().lower() == "offline":
+        return True
+    # Check Streamlit session state if available
+    try:
+        import streamlit as st
+        user = st.session_state.get("user", {})
+        return bool(user and user.get("offline", False))
+    except Exception:
+        return False
+
+
+def is_government_session(user: dict) -> bool:
+    """Check if a specific user dict represents a government session."""
+    return bool(user and user.get("role") == "government")
 
 
 def ai_provider() -> str:
@@ -131,13 +146,18 @@ ROLES = {
 }
 
 # Tabs each role can see
+# Every role now gets "📚 My PDFs" (upload + Q&A from their own PDF)
+_STUDY_TABS = ["📚 My PDFs"]   # universal PDF upload + knowledge Q&A tab
+
 ROLE_TABS = {
-    "government": ["📊 Analyst", "🔍 Fact-checker", "🔐 Auditor"],
-    "analyst":    ["📊 Analyst", "📰 Journalist", "🔍 Fact-checker", "🔐 Auditor"],
-    "journalist": ["📰 Journalist", "🔍 Fact-checker"],
+    "government": ["📊 Analyst", "🔍 Fact-checker", "🔐 Auditor"] + _STUDY_TABS,
+    "analyst":    ["📊 Analyst", "📰 Journalist", "🔍 Fact-checker",
+                   "🔐 Auditor"] + _STUDY_TABS,
+    "journalist": ["📰 Journalist", "🔍 Fact-checker"] + _STUDY_TABS,
     "student":    ["🎓 Student", "📤 Upload", "📝 Summary",
-                   "🃏 Flashcards", "🧠 Quiz", "▶️ Videos", "❓ Ask", "📈 Progress"],
-    "factchecker":["🔍 Fact-checker", "📊 Analyst"],
+                   "🃏 Flashcards", "🧠 Quiz", "▶️ Videos",
+                   "❓ Ask", "📈 Progress"] + _STUDY_TABS,
+    "factchecker":["🔍 Fact-checker", "📊 Analyst"] + _STUDY_TABS,
     "auditor":    ["🔐 Auditor", "📊 Analyst", "📰 Journalist",
-                   "🔍 Fact-checker", "🎓 Student"],
+                   "🔍 Fact-checker", "🎓 Student"] + _STUDY_TABS,
 }

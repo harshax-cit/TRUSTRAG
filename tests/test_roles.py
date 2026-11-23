@@ -64,23 +64,31 @@ class TestAuthentication(unittest.TestCase):
         finally:
             _clear()
 
-    def test_government_login_blocked_in_online_mode(self):
-        _set_online()
+    def test_government_login_works_from_any_env(self):
+        """
+        Single login page: government login succeeds regardless of env var.
+        The offline flag is set based on the ROLE, not the env var.
+        """
+        _set_online()   # env says online
         try:
-            from auth import authenticate, AuthError
-            with self.assertRaises(AuthError) as ctx:
-                authenticate("government", "gov-secure-2024")
-            self.assertIn("offline", str(ctx.exception).lower())
+            from auth import authenticate
+            user = authenticate("government", "gov-secure-2024")
+            self.assertEqual(user["role"], "government")
+            # offline flag driven by role
+            self.assertTrue(user["offline"],
+                "government role must set offline=True regardless of env var")
         finally:
             _clear()
 
-    def test_online_role_blocked_in_offline_mode(self):
-        _set_gov()
+    def test_online_role_works_from_any_env(self):
+        """Single login page: online roles work regardless of GOVERNMENT_MODE."""
+        _set_gov()   # env says offline
         try:
-            from auth import authenticate, AuthError
-            with self.assertRaises(AuthError) as ctx:
-                authenticate("analyst", "analyst-pass")
-            self.assertIn("government", str(ctx.exception).lower())
+            from auth import authenticate
+            user = authenticate("analyst", "analyst-pass")
+            self.assertEqual(user["role"], "analyst")
+            self.assertFalse(user["offline"],
+                "online roles must set offline=False")
         finally:
             _clear()
 
@@ -324,11 +332,15 @@ class TestRoleTabs(unittest.TestCase):
     def test_government_tabs_subset(self):
         from config import ROLE_TABS
         gov_tabs = ROLE_TABS["government"]
-        # Government must NOT have study tabs (no external uploads)
-        study_tabs = ["📤 Upload", "▶️ Videos", "❓ Ask"]
-        for t in study_tabs:
+        # Government must NOT have full study pipeline tabs
+        # (those require external student-mode features)
+        disallowed = ["📤 Upload", "▶️ Videos", "❓ Ask", "🧠 Quiz"]
+        for t in disallowed:
             self.assertNotIn(t, gov_tabs,
                 f"Government dashboard must not include {t}")
+        # But My PDFs (local upload + Q&A) is allowed
+        self.assertIn("📚 My PDFs", gov_tabs,
+                      "Government must have My PDFs tab (local only)")
 
     def test_student_has_study_tabs(self):
         from config import ROLE_TABS
