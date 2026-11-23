@@ -166,16 +166,6 @@ def sidebar():
     st.sidebar.radio("Navigation", nav_options, key="enterprise_nav", label_visibility="collapsed")
     st.sidebar.markdown("<hr style='border-color:#1c4532; margin:0.6rem 0;' />", unsafe_allow_html=True)
 
-    # ── Environment indicator ─────────────────────────────────────────────────
-    if is_government_mode():
-        st.sidebar.error(
-            "🔒 **OFFLINE SECURE**\n\n"
-            "Government Local Isolated Environment. External network is strictly disabled."
-        )
-    else:
-        ai_label = get_ai_label()
-        st.sidebar.info(f"{get_mode_label()}\n\n{ai_label}")
-
     # ── Logged-in user info ───────────────────────────────────────────────────
     user = st.session_state.get("user")
     if user:

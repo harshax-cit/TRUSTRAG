@@ -167,8 +167,6 @@ def _master_shell(user: dict, nav_key: str, page_title: str) -> str:
     is_gov = role == "government"
 
     # Sidebar
-    if is_gov:
-        offline_banner()
     _render_sidebar_brand()
     page = _render_sidebar_nav(role, nav_key)
     _render_sidebar_user(user)

@@ -430,11 +430,8 @@ def apply_enterprise_theme() -> None:
 def render_top_navbar(user: dict, page_title: str = "Home") -> None:
     """
     Unified top navigation bar shown on every page for every role.
-    Shows: page title | env badge | role badge | username
+    Shows: page title | role badge | username
     """
-    is_gov   = user.get("offline", False) or user.get("role") == "government"
-    env_cls  = "tr-badge-red"   if is_gov else "tr-badge-green"
-    env_lbl  = "🔒 OFFLINE"     if is_gov else "🌐 ONLINE"
     role_lbl = user.get("role", "user").replace("factchecker", "Fact-Checker").title()
     name     = user.get("name", user.get("username", "User"))
 
@@ -442,7 +439,6 @@ def render_top_navbar(user: dict, page_title: str = "Home") -> None:
     <div class="tr-topbar">
         <div class="tr-topbar-left">
             <span class="tr-topbar-title">{page_title}</span>
-            <span class="tr-badge {env_cls}">{env_lbl}</span>
             <span class="tr-badge tr-badge-gray">👤 {role_lbl}</span>
         </div>
         <div class="tr-topbar-right">
