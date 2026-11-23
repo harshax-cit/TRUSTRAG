@@ -33,15 +33,36 @@ def generate_cards(
     doc_name: str,
     pdf_path: str,
 ) -> list[dict]:
-    """Return a list of verified flashcard dicts for a topic."""
-    cards = []
-    cards.extend(_concept_cards(summary, topic["id"], doc_name))
-    cards.extend(_key_number_cards(topic, summary, index_dir, doc_name))
-    cards.extend(_cloze_cards(summary, topic["id"], doc_name))
+    """Return a list of verified flashcard dicts for a topic.
+
+    For the student role with an API key: Claude generates richer cards.
+    For all other cases: extractive generation (always works offline).
+    """
+    # Try AI generation first (student role, API key set, not government mode)
+    from study.ai_generate import generate_flashcards_api, _can_use_api
+    if _can_use_api():
+        ai_cards = generate_flashcards_api(topic, summary, n_cards=8)
+    else:
+        ai_cards = []
+
+    # Always generate extractive cards as well
+    extractive_cards = []
+    extractive_cards.extend(_concept_cards(summary, topic["id"], doc_name))
+    extractive_cards.extend(_key_number_cards(topic, summary, index_dir, doc_name))
+    extractive_cards.extend(_cloze_cards(summary, topic["id"], doc_name))
+
+    # Merge: AI cards first, then extractive (avoid duplicates by front text)
+    seen_fronts = set()
+    all_cards = []
+    for card in ai_cards + extractive_cards:
+        front_key = card.get("front", "")[:60].lower()
+        if front_key not in seen_fronts:
+            seen_fronts.add(front_key)
+            all_cards.append(card)
 
     # Verify every card whose back contains a number
     verified_cards = []
-    for card in cards:
+    for card in all_cards:
         card = _verify_card(card, pdf_path)
         if card is not None:
             verified_cards.append(card)

@@ -1000,6 +1000,14 @@ def study_tab_flashcards():
         st.info("Upload a PDF first (Upload tab).")
         return
 
+    from study.ai_generate import _can_use_api
+    ai_count = sum(1 for c in cards if c.get("source") == "ai")
+    ext_count = len(cards) - ai_count
+    if _can_use_api() and ai_count > 0:
+        st.success(f"☁️ {ai_count} AI-generated cards + 📚 {ext_count} extractive cards")
+    else:
+        st.caption(f"📚 {ext_count} extractive cards (offline mode)")
+
     topics    = st.session_state.study_topics
     topic_map = {t["id"]: t["title"] for t in topics}
 
@@ -1092,84 +1100,122 @@ def study_tab_quiz():
     _study_session_state()
     st.subheader("🧠 Quiz Mode")
 
-    cards = st.session_state.study_cards
-    deck  = st.session_state.study_leitner
-    dirs  = st.session_state.study_dirs
+    cards    = st.session_state.study_cards
+    deck     = st.session_state.study_leitner
+    dirs     = st.session_state.study_dirs
+    topics   = st.session_state.study_topics
+    summaries= st.session_state.study_summaries
 
     if not cards or not deck:
         st.info("Upload a PDF first (Upload tab).")
         return
 
-    due   = deck.due_cards()
-    score = st.session_state.study_quiz_score
+    from study.ai_generate import _can_use_api, generate_quiz_api
+    api_on = _can_use_api()
 
-    col_score, col_btn = st.columns([2, 1])
+    # ── Mode selector ─────────────────────────────────────────────────────────
+    col_mode, col_score, col_btn = st.columns([2, 2, 2])
+    with col_mode:
+        quiz_mode = st.radio(
+            "Quiz type",
+            ["AI Generated" if api_on else "AI (no key)", "Flashcard Based"],
+            horizontal=True,
+            disabled=not api_on,
+            key="quiz_mode_radio",
+        )
+        use_ai = api_on and quiz_mode == "AI Generated"
+        if api_on:
+            st.caption("☁️ Claude-powered" if use_ai else "📚 Extractive")
+        else:
+            st.caption("💻 Offline (no API key)")
+
+    score = st.session_state.study_quiz_score
     with col_score:
-        st.metric("Session score",
-                  f"{score['correct']}/{score['total']}",
-                  delta=None)
+        st.metric("Score", f"{score['correct']}/{score['total']}")
+
     with col_btn:
-        next_btn = st.button("Next question ▶", type="primary",
+        next_btn = st.button("▶ Next Question", type="primary",
                               use_container_width=True)
 
+    st.divider()
+
+    # ── Generate or fetch next question ──────────────────────────────────────
     if next_btn:
         import random
-        pool = due if due else cards
-        card = random.choice(pool)
-        st.session_state.study_quiz_q     = deck.make_quiz_question(card, cards)
-        st.session_state.study_quiz_ans   = None   # clear previous answer
+        st.session_state.study_quiz_ans = None
+
+        if use_ai and topics:
+            # Pick a random topic, generate AI question
+            topic   = random.choice(topics)
+            summary = summaries.get(topic["id"], {})
+            with st.spinner("Claude is generating a question…"):
+                ai_qs = generate_quiz_api(topic, summary, n_questions=1)
+            if ai_qs:
+                q = ai_qs[0]
+                q["card_id"] = f"ai_{topic['id']}_{int(time.time())}"
+                st.session_state.study_quiz_q = q
+            else:
+                # Fallback to card-based
+                card = random.choice(cards)
+                st.session_state.study_quiz_q = deck.make_quiz_question(card, cards)
+        else:
+            # Extractive: pick from due cards
+            pool = deck.due_cards() or cards
+            card = random.choice(pool)
+            st.session_state.study_quiz_q = deck.make_quiz_question(card, cards)
+
         st.rerun()
 
     q = st.session_state.study_quiz_q
     if not q:
-        st.info("Click 'Next question ▶' to start.")
+        st.info("Click **▶ Next Question** to start the quiz.")
         return
 
-    # Show question
+    # ── Render question ───────────────────────────────────────────────────────
+    is_ai_q = q.get("source") == "ai"
     st.markdown(f"### {q['question']}")
-    st.caption(f"Card type: {cards[0].get('type','') if cards else ''} · "
-               f"Source: {q.get('doc','?')} p.{q.get('page','?')}")
-    st.divider()
+    if is_ai_q:
+        st.caption(f"☁️ AI-generated · Topic: {q.get('topic_id','')} · p.{q.get('page','?')}")
+    else:
+        st.caption(f"📚 Flashcard-based · {q.get('doc','?')} p.{q.get('page','?')}")
 
-    # Show result if already answered this question
+    # ── Show result if already answered ──────────────────────────────────────
     prev_ans = st.session_state.get("study_quiz_ans")
     if prev_ans is not None:
         if prev_ans == q["answer"]:
             st.success(f"✅ Correct! **{q['answer']}**")
         else:
             st.error(f"❌ Incorrect. You chose: **{prev_ans}**")
-            st.info(f"Correct answer: **{q['answer']}**")
-        # Show source page
+            st.warning(f"Correct answer: **{q['answer']}**")
+        if is_ai_q and q.get("explanation"):
+            st.info(f"💡 {q['explanation']}")
         if dirs and q.get("doc") and q.get("page"):
-            _render_source(q.get("doc",""), q.get("page"),
-                           q.get("bbox"), dirs)
+            _render_source(q.get("doc",""), q.get("page"), q.get("bbox"), dirs)
         return
 
-    # Render choices as radio (avoids duplicate key issues with buttons)
-    choice_labels = [f"{chr(65+i)}. {c}" for i, c in enumerate(q["choices"])]
-    selected = st.radio("Choose your answer:", choice_labels,
-                        index=None, key=f"quiz_radio_{q['card_id']}")
+    # ── Answer choices ────────────────────────────────────────────────────────
+    choices = q.get("choices", [])
+    choice_labels = [f"{chr(65+i)}. {c}" for i, c in enumerate(choices)]
+    selected = st.radio("Your answer:", choice_labels, index=None,
+                        key=f"quiz_radio_{q.get('card_id','')}_{len(choices)}")
 
     submit = st.button("Submit ✔", disabled=selected is None,
-                       use_container_width=True)
+                       use_container_width=True, type="primary")
 
     if submit and selected is not None:
-        # Extract the actual answer text (strip "A. " prefix)
-        chosen = selected[3:]   # remove "X. "
+        chosen  = selected[3:]   # strip "A. " prefix
         correct = chosen == q["answer"]
-
         score["total"] += 1
         if correct:
             score["correct"] += 1
-            deck.answer(q["card_id"], True)
+            if not is_ai_q:
+                deck.answer(q["card_id"], True)
         else:
-            deck.answer(q["card_id"], False)
-
+            if not is_ai_q:
+                deck.answer(q["card_id"], False)
         st.session_state.study_quiz_ans = chosen
         st.rerun()
 
-
-# ── Tab: Videos ──────────────────────────────────────────────────────────────
 
 def study_tab_videos():
     _study_session_state()
@@ -1182,20 +1228,36 @@ def study_tab_videos():
 
     from study.youtube import recommendations_for_topic, YOUTUBE_API_KEY as _ytkey
 
-    mode_label = "☁️ YouTube API" if _ytkey else "🔗 Search links (no API key)"
-    st.caption(f"Mode: {mode_label} · Recommendations are external and not from your document.")
+    if _ytkey:
+        st.caption("☁️ YouTube Data API v3 — real video results")
+    else:
+        st.caption("🔗 YouTube search links (set YOUTUBE_API_KEY for real results)")
+
+    st.info("📌 Recommendations are external and not verified against your document.")
 
     for topic in topics:
-        with st.expander(f"🎬 {topic['title']}"):
+        with st.expander(f"🎬 {topic['title']} (p.{topic['page_start']}–{topic['page_end']})"):
             recs = recommendations_for_topic(topic, n=3)
+
+            if not recs or recs[0].get("mode") == "blocked":
+                st.warning("Video recommendations are blocked in Government offline mode.")
+                continue
+
             for r in recs:
-                st.markdown(f"[{r['title']}]({r['url']})")
-                if r.get("channel"):
-                    st.caption(f"Channel: {r['channel']}")
-            st.caption(recs[0]["note"] if recs else "")
+                if r.get("mode") == "B" and r.get("title"):
+                    # Real API result — show rich card
+                    col_info, col_link = st.columns([4, 1])
+                    with col_info:
+                        st.markdown(f"**{r['title']}**")
+                        if r.get("channel"):
+                            st.caption(f"📺 {r['channel']}"
+                                       + (f" · ⏱ {r['duration']}" if r.get("duration") else ""))
+                    with col_link:
+                        st.link_button("Watch ▶", r["url"], use_container_width=True)
+                else:
+                    # Mode A — search link
+                    st.link_button(r["title"], r["url"], use_container_width=True)
 
-
-# ── Tab: Ask (Q&A over uploaded PDF) ─────────────────────────────────────────
 
 def study_tab_ask():
     _study_session_state()
@@ -1333,6 +1395,14 @@ def study_tab_my_pdfs():
     )
 
     cleanup_expired_sessions()
+
+    # Show AI mode status
+    from study.ai_generate import _can_use_api as _ai_ok
+    if _ai_ok():
+        st.success("☁️ **AI mode active** — Claude will generate richer summaries, "
+                   "flashcards and quiz questions from your PDF.")
+    else:
+        st.info("💻 **Offline mode** — Extractive summaries and flashcards (no API key).")
 
     st.caption(f"Max {MAX_UPLOAD_MB} MB · Max {MAX_PAGES} pages · PDF only")
 

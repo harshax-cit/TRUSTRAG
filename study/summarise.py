@@ -38,12 +38,10 @@ def summarise_topic(
     bullets     = _extractive_summary(topic, index_dir, doc_name, n_bullets)
     key_numbers = _key_numbers(topic, index_dir, doc_name)
 
-    # Optional LLM rewrite
-    if os.environ.get("ANTHROPIC_API_KEY") and bullets:
-        try:
-            bullets = _llm_summary(topic, bullets, n_bullets)
-        except Exception:
-            pass  # fall back silently
+    # AI rewrite when API key is set (student role, not government mode)
+    from study.ai_generate import rewrite_summary_api, _can_use_api
+    if _can_use_api() and bullets:
+        bullets = rewrite_summary_api(topic, bullets, n_points=n_bullets)
 
     return {
         "title":      topic["title"],

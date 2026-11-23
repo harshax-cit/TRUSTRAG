@@ -11,7 +11,11 @@ pillow==13.0.0
 huggingface-hub==2.4.0
 datasets==5.2.0
 pytest==9.2.0
+fpdf2==2.9.0
+anthropic>=0.20.0
 
-# Optional — enable LLM/vision chart reading
+# Optional — enable OpenAI vision chart reading
 # openai>=1.0.0
-# anthropic>=0.20.0
+
+# YouTube Data API v3
+# (no extra package needed — uses stdlib urllib)
