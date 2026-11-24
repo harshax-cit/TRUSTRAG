@@ -193,114 +193,269 @@ def _master_shell(user: dict, nav_key: str, page_title: str) -> str:
 # ── Shared page implementations ───────────────────────────────────────────────
 
 def _page_home(user: dict, idx_dir: Path, pdf_dir: Path) -> None:
+    """
+    Overview (dashboard) page.
+    New design: serif title, metric tiles, continue studying card, topics, recent answers, videos.
+    """
     role = user.get("role", "analyst")
     is_gov = role == "government"
     name = user.get("name", "User")
 
-    render_page_header(
-        f"Welcome back, {name.split()[0]}",
-        "Search, analyse, and verify information from documents and reports.",
-    )
+    if _NEW_UI:
+        from ui.components import page_header, metric_tile, empty_state, source_chip
+        # Determine if we're using demo data
+        is_demo = False
+        try:
+            manifest = load_manifest(str(idx_dir))
+            is_demo = any("sample" in k.lower() or "demo" in k.lower() for k in manifest.keys())
+        except Exception:
+            pass
+        
+        tag = "Sample data" if is_demo else ""
+        page_header("Study overview",
+                    "Review your documents, flashcards and recent answers.",
+                    tag=tag)
+    else:
+        render_page_header(
+            f"Welcome back, {name.split()[0]}",
+            "Search, analyse, and verify information from documents and reports.",
+        )
 
-    # KPI row
+    # Four metric tiles
     try:
         manifest   = load_manifest(str(idx_dir))
         total_docs = len(manifest)
-        total_facts = sum(v.get("fact_count", 0) for v in manifest.values())
+        scanned    = sum(1 for v in manifest.values() if v.get("contains_scans"))
+        total_facts= sum(v.get("fact_count", 0) for v in manifest.values())
+        # OCR confidence (average across scanned docs)
+        ocr_confs  = [v.get("ocr_confidence", 1.0)
+                      for v in manifest.values() if v.get("contains_scans")]
+        ocr_avg    = sum(ocr_confs) / len(ocr_confs) if ocr_confs else 1.0
+        
         audit       = AuditLog(str(idx_dir))
         audit_ok, _ = audit.verify_chain()
         refusals    = len(get_refusal_ledger(str(idx_dir)))
     except Exception:
-        total_docs = total_facts = refusals = 0
+        total_docs = scanned = total_facts = refusals = 0
+        ocr_avg = 1.0
         audit_ok = True
 
-    stat_row([
-        {"label": "Documents",     "value": str(total_docs)},
-        {"label": "Indexed Facts", "value": f"{total_facts:,}"},
-        {"label": "Audit Chain",   "value": "Intact" if audit_ok else "⚠ Broken",
-         "color": COLORS["success_text"] if audit_ok else COLORS["danger_text"]},
-        {"label": "Refusals",      "value": str(refusals)},
-    ])
+    # Try to get study stats (cards due, quiz average, topics)
+    cards_due = 0
+    quiz_avg  = 0
+    topics_found = 0
+    try:
+        from study.leitner import get_due_cards
+        from study.topics import get_topics
+        cards_due = len(get_due_cards())
+        topics_found = len(get_topics())
+        # Quiz average from session state or storage
+        quiz_avg = st.session_state.get("quiz_avg", 0)
+    except Exception:
+        pass
+
+    if _NEW_UI:
+        c1, c2, c3, c4 = st.columns(4)
+        metric_tile("Documents",
+                    str(total_docs),
+                    f"{scanned} scanned · OCR {ocr_avg:.0%}" if scanned else "",
+                    col=c1)
+        metric_tile("Topics found",
+                    str(topics_found),
+                    col=c2)
+        metric_tile("Cards due today",
+                    str(cards_due),
+                    col=c3)
+        metric_tile("Quiz average",
+                    f"{quiz_avg}%" if quiz_avg else "—",
+                    col=c4)
+    else:
+        stat_row([
+            {"label": "Documents",     "value": str(total_docs)},
+            {"label": "Indexed Facts", "value": f"{total_facts:,}"},
+            {"label": "Audit Chain",   "value": "Intact" if audit_ok else "⚠ Broken",
+             "color": COLORS["success_text"] if audit_ok else COLORS["danger_text"]},
+            {"label": "Refusals",      "value": str(refusals)},
+        ])
+
+    st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
+
+    # Two columns: Continue studying + Topics
+    left, right = st.columns([1.2, 1], gap="medium")
+
+    with left:
+        st.markdown('<div class="tr-card">', unsafe_allow_html=True)
+        st.markdown("**Continue studying**")
+        
+        # Try to get current flashcard
+        current_card = None
+        try:
+            from study.flashcards import get_next_card
+            current_card = get_next_card()
+        except Exception:
+            pass
+
+        if current_card and _NEW_UI:
+            st.markdown(f"""
+            <div class="tr-card-navy" style="margin:0.75rem 0;">
+                <div class="tr-flashcard-q">{current_card.get('question','')}</div>
+                <div style="margin-top:0.75rem;">
+                    {source_chip(current_card.get('doc',''), current_card.get('page',1), True)}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            b1, b2, b3 = st.columns(3)
+            with b1:
+                if st.button("Review again", key="home_card_again"):
+                    st.info("Moved to review")
+            with b2:
+                if st.button("Show answer", key="home_card_flip", type="primary"):
+                    st.session_state["show_card_answer"] = True
+                    st.rerun()
+            with b3:
+                if st.button("I knew it", key="home_card_knew"):
+                    st.success("Next card")
+            
+            if st.session_state.get("show_card_answer"):
+                st.markdown(f"**Answer:** {current_card.get('answer','')}")
+            
+            # Deck progress
+            if _NEW_UI:
+                try:
+                    from study.leitner import get_box_counts
+                    counts = get_box_counts()
+                    total_cards = sum(counts.values())
+                    reviewed = sum(counts.get(i,0) for i in [2,3,4,5])
+                    pct = reviewed / total_cards if total_cards else 0
+                    from ui.components import progress_bar
+                    progress_bar(pct, f"Deck progress: {reviewed}/{total_cards}")
+                except Exception:
+                    pass
+        else:
+            if _NEW_UI:
+                empty_state("No cards yet", "Upload a PDF to generate flashcards")
+            else:
+                st.info("Upload documents to start studying.")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with right:
+        st.markdown('<div class="tr-card">', unsafe_allow_html=True)
+        st.markdown("**Topics**")
+        
+        try:
+            from study.topics import get_topics
+            topics = get_topics()
+            if topics and _NEW_UI:
+                for t in topics[:6]:
+                    name = t.get("name", "Unknown")
+                    mastery = t.get("mastery", 0)
+                    st.markdown(f"""
+                    <div style="margin-bottom:0.75rem;">
+                        <div style="font-size:13px;font-weight:600;color:#0B1F33;margin-bottom:0.25rem;">
+                            {name}
+                        </div>
+                        <div style="background:#DDE5EC;border-radius:999px;height:6px;overflow:hidden;">
+                            <div style="background:#0F7C7E;height:100%;width:{mastery}%;"></div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            elif _NEW_UI:
+                empty_state("No topics yet", "Topics are extracted from your documents")
+            else:
+                st.caption("Topics will appear here")
+        except Exception:
+            if _NEW_UI:
+                empty_state("No topics yet")
+            else:
+                st.caption("Topics unavailable")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("<div style='height:1rem;'></div>", unsafe_allow_html=True)
 
-    # Quick actions grid
-    st.markdown("#### Quick Actions")
-    q1, q2, q3, q4 = st.columns(4)
+    # Bottom row: Recent answers + Videos
+    r_left, r_right = st.columns(2, gap="medium")
 
-    with q1:
-        st.markdown("""
-        <div class="tr-card-sm" style="text-align:center;">
-            <div style="font-size:1.6rem;margin-bottom:0.5rem;">📤</div>
-            <div style="font-weight:600;font-size:0.875rem;color:#111827;">Upload Document</div>
-            <div style="font-size:0.78rem;color:#9ca3af;margin-top:0.25rem;">PDF, images, tables</div>
-        </div>""", unsafe_allow_html=True)
-        if st.button("Upload →", key="home_upload", use_container_width=True):
-            st.session_state[f"nav_{role}"] = _nav_label(role, "Upload") or \
-                _nav_label(role, "My Documents") or _nav_label(role, "Upload PDF")
-            st.rerun()
+    with r_left:
+        st.markdown('<div class="tr-card">', unsafe_allow_html=True)
+        st.markdown("**Recent answers**")
+        
+        try:
+            from tracerag.audit import AuditLog
+            log = AuditLog(str(idx_dir))
+            entries = log.read_log()[-8:]
+            entries.reverse()
+            
+            if entries and _NEW_UI:
+                for e in entries:
+                    q = e.get("query", "")[:60]
+                    status = e.get("decision", "answer")
+                    doc = e.get("source_doc", "")
+                    page = e.get("page", 1)
+                    receipt = e.get("receipt_id", "")[:12]
+                    
+                    b_html = badge(status)
+                    src_html = source_chip(doc, page, True) if doc else ""
+                    
+                    st.markdown(f"""
+                    <div style="padding:0.5rem 0;border-bottom:1px solid #F4F7FA;">
+                        <div style="font-size:13px;font-weight:500;color:#0B1F33;margin-bottom:0.3rem;">
+                            {q}
+                        </div>
+                        <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+                            {b_html} {src_html}
+                            <span style="font-size:11px;color:#5B6878;" title="Receipt ID">{receipt}</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            elif _NEW_UI:
+                empty_state("No answers yet", "Ask your first question to see it here")
+            else:
+                st.caption("No recent answers")
+        except Exception as e:
+            if _NEW_UI:
+                empty_state("Audit log unavailable")
+            else:
+                st.caption(f"Error: {e}")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    with q2:
-        st.markdown("""
-        <div class="tr-card-sm" style="text-align:center;">
-            <div style="font-size:1.6rem;margin-bottom:0.5rem;">❓</div>
-            <div style="font-weight:600;font-size:0.875rem;color:#111827;">Ask a Question</div>
-            <div style="font-size:0.78rem;color:#9ca3af;margin-top:0.25rem;">Ground every answer</div>
-        </div>""", unsafe_allow_html=True)
-        if st.button("Ask →", key="home_ask", use_container_width=True):
-            st.session_state[f"nav_{role}"] = _nav_label(role, "Ask a Question")
-            st.rerun()
-
-    with q3:
-        st.markdown("""
-        <div class="tr-card-sm" style="text-align:center;">
-            <div style="font-size:1.6rem;margin-bottom:0.5rem;">📊</div>
-            <div style="font-weight:600;font-size:0.875rem;color:#111827;">Reports</div>
-            <div style="font-size:0.78rem;color:#9ca3af;margin-top:0.25rem;">Cross-document analysis</div>
-        </div>""", unsafe_allow_html=True)
-        if st.button("Reports →", key="home_reports", use_container_width=True):
-            st.session_state[f"nav_{role}"] = _nav_label(role, "Reports")
-            st.rerun()
-
-    with q4:
-        st.markdown("""
-        <div class="tr-card-sm" style="text-align:center;">
-            <div style="font-size:1.6rem;margin-bottom:0.5rem;">🔍</div>
-            <div style="font-weight:600;font-size:0.875rem;color:#111827;">Evidence Explorer</div>
-            <div style="font-size:0.78rem;color:#9ca3af;margin-top:0.25rem;">Inspect source pages</div>
-        </div>""", unsafe_allow_html=True)
-        if st.button("Explore →", key="home_explore", use_container_width=True):
-            st.session_state[f"nav_{role}"] = _nav_label(role, "Evidence Explorer") or \
-                _nav_label(role, "Fact-Check")
-            st.rerun()
-
-    st.markdown("<div style='height:0.5rem;'></div>", unsafe_allow_html=True)
-
-    # Recent documents
-    st.markdown("#### Recent Documents")
-    docs = list_user_documents(user["username"], role, is_government=is_gov)
-    if docs:
-        df = pd.DataFrame(docs[:8])
-        display_cols = []
-        col_map = {
-            "filename": "Filename", "file_type": "Type",
-            "upload_time": "Uploaded", "status": "Status",
-            "fact_count": "Facts",
-        }
-        for k, v in col_map.items():
-            if k in df.columns:
-                display_cols.append(k)
-        df_disp = df[display_cols].rename(columns=col_map)
-        if "Uploaded" in df_disp.columns:
-            df_disp["Uploaded"] = df_disp["Uploaded"].str[:16].str.replace("T", " ")
-        if "Status" in df_disp.columns:
-            df_disp["Status"] = df_disp["Status"].apply(
-                lambda s: f"✅ {s.capitalize()}" if s == "ready" else f"⏳ {s.capitalize()}")
-        st.dataframe(df_disp, use_container_width=True, hide_index=True)
-    else:
-        empty_state("No documents yet", "Upload a PDF to get started.", "📄")
-
-
+    with r_right:
+        st.markdown('<div class="tr-card">', unsafe_allow_html=True)
+        st.markdown("**Recommended videos**")
+        
+        if is_gov:
+            st.caption("Videos unavailable in offline mode")
+        else:
+            try:
+                from study.topics import get_topics
+                topics = get_topics()
+                if topics and _NEW_UI:
+                    for t in topics[:3]:
+                        name = t.get("name", "")
+                        st.markdown(f"""
+                        <div style="padding:0.5rem 0;border-bottom:1px solid #F4F7FA;">
+                            <div style="font-size:13px;font-weight:600;color:#0B1F33;">{name}</div>
+                            <a href="https://www.youtube.com/results?search_query={name.replace(' ','+')}"
+                               target="_blank" style="font-size:12px;color:#0F7C7E;text-decoration:none;">
+                                Search YouTube for this topic &rarr;
+                            </a>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    st.caption("External recommendations, not verified against your document.")
+                elif _NEW_UI:
+                    empty_state("No topics yet", "Topics are extracted from uploaded documents")
+                else:
+                    st.caption("Topics unavailable")
+            except Exception:
+                if _NEW_UI:
+                    empty_state("Topics unavailable")
+                else:
+                    st.caption("Error loading topics")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
 def _nav_label(role: str, page: str) -> str:
     """Find the full nav label (icon + name) for a page name."""
     items = NAV_ITEMS.get(role, [])
