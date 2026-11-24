@@ -302,6 +302,21 @@ def _page_home(user: dict, idx_dir: Path, pdf_dir: Path) -> None:
 
     st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
 
+    # For students with no data, show helpful guide
+    if is_student and total_docs == 0:
+        from pathlib import Path
+        existing_pdfs = list(Path("data/raw/pdfs").glob("*.pdf")) if Path("data/raw/pdfs").exists() else []
+        if existing_pdfs:
+            st.info(
+                f"📚 **{len(existing_pdfs)} PDFs ready to process!** "
+                f"Go to **'My PDFs'** tab in the sidebar and upload any file to process all documents together."
+            )
+        else:
+            st.info(
+                "📤 **Get started:** Go to **'My PDFs'** tab in the sidebar to upload your first document."
+            )
+        st.markdown("<div style='height:1rem;'></div>", unsafe_allow_html=True)
+
     # Two columns: Continue studying + Topics (STUDENT ONLY)
     if is_student:
         left, right = st.columns([1.2, 1], gap="medium")
