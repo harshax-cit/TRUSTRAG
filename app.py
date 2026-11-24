@@ -1478,6 +1478,26 @@ def _show_login():
 
 
 
+def _study_session_state():
+    """Initialize study session state variables if they don't exist."""
+    if "study_session_id" not in st.session_state:
+        st.session_state.study_session_id = None
+    if "study_pdf_names" not in st.session_state:
+        st.session_state.study_pdf_names = []
+    if "study_topics" not in st.session_state:
+        st.session_state.study_topics = []
+    if "study_summaries" not in st.session_state:
+        st.session_state.study_summaries = {}
+    if "study_all_cards" not in st.session_state:
+        st.session_state.study_all_cards = []
+    if "study_cards" not in st.session_state:
+        st.session_state.study_cards = []
+    if "study_dirs" not in st.session_state:
+        st.session_state.study_dirs = None
+    if "quiz_avg" not in st.session_state:
+        st.session_state.quiz_avg = 0
+
+
 def study_tab_upload():
     """
     My PDFs upload page — redesigned with 5-step stepper, drag-drop card,
