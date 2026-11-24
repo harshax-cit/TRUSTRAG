@@ -1496,7 +1496,7 @@ def _study_session_state():
         st.session_state.study_dirs = None
     if "study_leitner" not in st.session_state:
         from study.leitner import LeitnerDeck
-        st.session_state.study_leitner = LeitnerDeck()
+        st.session_state.study_leitner = LeitnerDeck([])
     if "quiz_avg" not in st.session_state:
         st.session_state.quiz_avg = 0
 
