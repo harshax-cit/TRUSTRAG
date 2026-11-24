@@ -1,5 +1,5 @@
 """
-ui/components.py – Reusable TraceRAG UI components.
+ui/components.py - Reusable TraceRAG UI components.
 
 All components return HTML strings or call st.markdown.
 No emoji in UI text. Use text labels + CSS for status.
