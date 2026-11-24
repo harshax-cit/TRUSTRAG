@@ -1266,57 +1266,25 @@ def view_help_and_support(user, is_gov):
 def main():
     st.set_page_config(
         page_title="TraceRAG | Evidence Intelligence",
-        page_icon="🔎",
+        page_icon="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23F5B700'/><path d='M8 16l5 5L24 11' stroke='%230B1F33' stroke-width='3' fill='none' stroke-linecap='round'/></svg>",
         layout="wide",
         initial_sidebar_state="expanded",
     )
 
-    apply_enterprise_theme()
+    from ui.theme import inject_theme
+    inject_theme()
 
     # Initialise nav keys before any widget reads them
-    for nav_key in ["nav_government","nav_analyst","nav_journalist",
-                    "nav_student","nav_factchecker","nav_auditor","enterprise_nav"]:
-        if nav_key not in st.session_state:
-            st.session_state[nav_key] = None
+    for _r in ["government","analyst","journalist","student","factchecker","auditor"]:
+        for _g in ["Workspace","Study","Trust"]:
+            k = f"nav_{_r}_{_g}"
+            if k not in st.session_state:
+                st.session_state[k] = None
+    if "enterprise_nav" not in st.session_state:
+        st.session_state["enterprise_nav"] = None
 
-    # Login gate — uses ui.render_login with callback
     if not st.session_state.get("user"):
-        from tracerag.ui import render_login
-        def _handle_auth(username, password, mode="login", **kwargs):
-            if not username or not password:
-                st.warning("Enter both username and password.")
-                return
-            if mode == "login":
-                try:
-                    user = authenticate(username.strip(), password)
-                    st.session_state["user"] = user
-                    ri = get_role_info(user["role"])
-                    st.success(f"{ri['icon']} Welcome **{user['name']}**!")
-                    time.sleep(0.5)
-                    st.rerun()
-                except AuthError as e:
-                    st.error(str(e))
-            else:  # register
-                # Map display name back to internal role key
-                role_map = {
-                    "Student":       "student",
-                    "Policy Analyst":"analyst",
-                    "Journalist":    "journalist",
-                    "Fact-Checker":  "factchecker",
-                }
-                internal_role = role_map.get(kwargs.get("role","Student"), "student")
-                try:
-                    from auth import create_account
-                    user = create_account(username.strip(), password,
-                                         kwargs.get("name",""), internal_role)
-                    st.session_state["user"] = user
-                    st.success(f"Account created! Welcome **{user['name']}**.")
-                    time.sleep(0.5)
-                    st.rerun()
-                except AuthError as e:
-                    st.error(str(e))
-
-        render_login(on_login=_handle_auth)
+        _show_login()
         return
 
     user   = st.session_state["user"]
@@ -1341,48 +1309,174 @@ def main():
         st.error(f"Unknown role: {role}")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# STUDENT STUDY MODE — tabs 5-11
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── Login screen ──────────────────────────────────────────────────────────────
 
-def _study_session_state():
-    """Initialise all study-mode session state keys."""
-    defaults = {
-        "study_session_id":  None,
-        "study_dirs":        None,
-        "study_manifest":    {},
-        "study_topics":      [],
-        "study_summaries":   {},
-        "study_cards":       [],
-        "study_leitner":     None,
-        "study_quiz_q":      None,
-        "study_quiz_ans":    None,
-        "study_quiz_score":  {"correct": 0, "total": 0},
-        "study_flip":        {},    # card_id → bool (flipped?)
-        "study_pdf_names":   [],
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
+def _show_login():
+    from ui.theme import inject_theme
+    inject_theme()
+
+    left, right = st.columns([1.1, 1], gap="large")
+
+    # ── Left: hero panel ──────────────────────────────────────────────────────
+    with left:
+        st.markdown("""
+        <div class="tr-login-hero">
+            <div class="tr-hero-logo">&#10003;</div>
+            <div class="tr-hero-title">TraceRAG</div>
+            <div class="tr-hero-headline">Every answer,<br>proven on the page.</div>
+            <div class="tr-hero-lead">
+                Ask questions over government reports. Every answer cites
+                the source document, page, and region — with pixel-level
+                verification and a tamper-evident audit trail.
+            </div>
+            <div class="tr-hero-minicard">
+                <div style="font-size:11px;color:#5B6878;margin-bottom:6px;">
+                    Example: table answer highlighted
+                </div>
+                <table style="width:100%;border-collapse:collapse;font-size:11px;">
+                    <tr>
+                        <td style="padding:3px 6px;border:1px solid #DDE5EC;">Revenue</td>
+                        <td style="padding:3px 6px;border:1px solid #DDE5EC;">FY24</td>
+                        <td style="padding:3px 6px;border:1px solid #DDE5EC;">
+                            <span class="tr-hero-cell-hl">&#8377;&nbsp;4,832 Cr</span>
+                        </td>
+                    </tr>
+                </table>
+                <div style="font-size:10px;color:#5B6878;margin-top:5px;">
+                    report_a.pdf, page 2 &middot; value re-read from the cell
+                </div>
+            </div>
+            <div class="tr-hero-feat">
+                <div class="tr-hero-feat-dot"></div>
+                <div class="tr-hero-feat-text"><strong>Verified sources</strong> &mdash; every answer cites page and region</div>
+            </div>
+            <div class="tr-hero-feat">
+                <div class="tr-hero-feat-dot"></div>
+                <div class="tr-hero-feat-text"><strong>Refuses when unsure</strong> &mdash; no hallucinated numbers</div>
+            </div>
+            <div class="tr-hero-feat">
+                <div class="tr-hero-feat-dot"></div>
+                <div class="tr-hero-feat-text"><strong>Tamper-evident audit</strong> &mdash; HMAC chain on every query</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # ── Right: login panel ────────────────────────────────────────────────────
+    with right:
+        st.markdown('<div class="tr-login-panel">', unsafe_allow_html=True)
+        st.markdown('<div class="tr-login-title">Welcome back</div>', unsafe_allow_html=True)
+        st.markdown('<div class="tr-login-sub">Choose your role to continue.</div>', unsafe_allow_html=True)
+
+        tab_in, tab_reg = st.tabs(["Sign in", "Create account"])
+
+        with tab_in:
+            # Role selector
+            ROLE_OPTS = ["Government","Analyst","Journalist","Student","Fact-checker","Auditor"]
+            role_sel = st.pills("Role", ROLE_OPTS, default="Student", key="login_role_sel")
+            if not role_sel:
+                role_sel = "Student"
+
+            # Mode banner
+            if role_sel == "Government":
+                st.markdown(
+                    '<div class="tr-mode-banner tr-mode-offline">' +
+                    'Offline mode: runs fully local, nothing leaves this machine' +
+                    '</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    '<div class="tr-mode-banner tr-mode-online">' +
+                    'Online mode: AI flashcards, quizzes and video picks are on' +
+                    '</div>', unsafe_allow_html=True)
+
+            with st.form("login_form"):
+                username = st.text_input("Username", placeholder="Enter your username")
+                password = st.text_input("Password", type="password",
+                                          placeholder="Enter your password")
+                signing_in = st.session_state.get("signing_in", False)
+                btn = st.form_submit_button(
+                    "Signing in..." if signing_in else "Sign in",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=signing_in,
+                )
+
+            if btn and not signing_in:
+                if not username.strip() or not password:
+                    st.error("Please enter your username and password.")
+                else:
+                    st.session_state["signing_in"] = True
+                    try:
+                        user = authenticate(username.strip(), password)
+                        st.session_state["user"] = user
+                        st.session_state["signing_in"] = False
+                        st.rerun()
+                    except AuthError as e:
+                        st.session_state["signing_in"] = False
+                        # Plain-language errors, no stack traces
+                        msg = str(e)
+                        if "password" in msg.lower() or "invalid" in msg.lower():
+                            st.error("That password is incorrect.")
+                        elif "offline" in msg.lower():
+                            st.error("Government accounts only work in offline mode.")
+                        elif "government" in msg.lower():
+                            st.error("This server runs in offline mode — only Government accounts are permitted.")
+                        else:
+                            st.error(msg)
+
+            st.caption("Session ends after inactivity.")
+
+        with tab_reg:
+            if st.session_state.get("login_role_sel") == "Government":
+                st.info("Government accounts must be provisioned by an administrator.")
+            else:
+                SELF_REG_OPTS = ["Student","Analyst","Journalist","Fact-checker"]
+                st.caption("Government and Auditor accounts require administrator provisioning.")
+                with st.form("register_form"):
+                    rn  = st.text_input("Full name",        placeholder="Your full name")
+                    ru  = st.text_input("Username",         placeholder="Choose a username")
+                    rp  = st.text_input("Password",         type="password",
+                                         placeholder="At least 6 characters")
+                    rp2 = st.text_input("Confirm password", type="password")
+                    rr  = st.selectbox("Role", SELF_REG_OPTS,
+                                        format_func=lambda r: r)
+                    rbtn = st.form_submit_button("Create account", type="primary",
+                                                  use_container_width=True)
+                if rbtn:
+                    if rp != rp2:
+                        st.error("Passwords do not match.")
+                    elif len(rp) < 6:
+                        st.error("Password must be at least 6 characters.")
+                    else:
+                        try:
+                            role_map = {
+                                "Student": "student", "Analyst": "analyst",
+                                "Journalist": "journalist", "Fact-checker": "factchecker"
+                            }
+                            from auth import create_account
+                            user = create_account(ru.strip(), rp, rn.strip(),
+                                                  role_map.get(rr, "student"))
+                            st.session_state["user"] = user
+                            st.rerun()
+                        except AuthError as e:
+                            st.error(str(e))
+
+        st.markdown("""
+        <div class="tr-explainer-row">
+            <div class="tr-explainer-box">
+                <strong>Government: offline</strong>
+                Local-only processing. No data leaves the machine.
+            </div>
+            <div class="tr-explainer-box">
+                <strong>All other roles: online</strong>
+                Cloud AI features available when API keys are set.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
-def _render_source(doc: str, page: int, bbox, session_dirs: dict):
-    """Render a PDF page with highlight inside an expander."""
-    if not doc or not page:
-        return
-    pdf_path = session_dirs["pdfs"] / doc
-    if not pdf_path.exists():
-        # Try shared collection
-        pdf_path = PDF_DIR / doc
-    if not pdf_path.exists():
-        return
-    img = render_page_bytes(str(pdf_path), page, bbox, dpi=120)
-    if img:
-        with st.expander(f"📄 Source: {doc} p.{page}"):
-            st.image(img, width="stretch")
 
-
-# ── Tab: Upload ───────────────────────────────────────────────────────────────
 
 def study_tab_upload():
     _study_session_state()

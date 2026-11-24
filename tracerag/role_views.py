@@ -36,6 +36,17 @@ from .ui import (
     stat_row, evidence_box, empty_state, status_badge,
     render_dashboard_metrics, COLORS, ROLE_NAME_MAP,
 )
+# New design system
+try:
+    from ui.theme import inject_theme, STATUS_COLORS
+    from ui.components import (
+        topbar as _topbar, sidebar_nav, page_header as _ph,
+        metric_tile, source_chip, empty_state as _empty,
+        stepper, progress_bar, badge, pill,
+    )
+    _NEW_UI = True
+except ImportError:
+    _NEW_UI = False
 from .verify import Verifier
 
 # ── Navigation definitions per role ──────────────────────────────────────────
@@ -162,8 +173,17 @@ def _master_shell(user: dict, nav_key: str, page_title: str) -> str:
     """
     Render brand + nav + user in sidebar, topbar in main area.
     Returns the selected page name.
-    Uses ui.render_sidebar and ui.render_topbar — same for all roles.
+    Uses ui.components for the new design system.
     """
+    if _NEW_UI:
+        from ui.theme import inject_theme
+        inject_theme()
+        is_gov = user.get("role", "") == "government"
+        from ui.components import sidebar_nav, topbar as _topbar
+        page = sidebar_nav(user, is_gov)
+        _topbar(user, is_gov)
+        return page
+    # Fallback to old system
     apply_enterprise_theme()
     page = render_sidebar(user, nav_key)
     render_topbar(user, page)
@@ -888,93 +908,71 @@ def _page_student_progress() -> None:
 
 def render_government_interface(user: dict, idx_dir: Path, pdf_dir: Path) -> None:
     page = _master_shell(user, "nav_government", "Government Secure Workspace")
-
-    dispatch = {
-        "Home":               lambda: _page_home(user, idx_dir, pdf_dir),
-        "My Documents":       lambda: _page_documents(user, idx_dir, pdf_dir),
-        "Upload":             lambda: _page_documents(user, idx_dir, pdf_dir),
-        "Ask a Question":     lambda: _page_ask_question(user, idx_dir, pdf_dir),
-        "Evidence Explorer":  lambda: _page_evidence_explorer(user, idx_dir, pdf_dir),
-        "Reports":            lambda: _page_reports(user, idx_dir),
-        "Audit Trail":        lambda: _page_audit_trail(user, idx_dir),
-        "Settings":           lambda: _page_settings(user, idx_dir),
-    }
-    dispatch.get(page, lambda: _page_home(user, idx_dir, pdf_dir))()
+    _dispatch_page(page, user, idx_dir, pdf_dir)
 
 
 def render_analyst_interface(user: dict, idx_dir: Path, pdf_dir: Path) -> None:
     page = _master_shell(user, "nav_analyst", "Policy Analyst Workspace")
-
-    dispatch = {
-        "Home":               lambda: _page_home(user, idx_dir, pdf_dir),
-        "Ask a Question":     lambda: _page_ask_question(user, idx_dir, pdf_dir),
-        "My Documents":       lambda: _page_documents(user, idx_dir, pdf_dir),
-        "Media Library":      lambda: _page_media_library(user, idx_dir, pdf_dir),
-        "Evidence Explorer":  lambda: _page_evidence_explorer(user, idx_dir, pdf_dir),
-        "Reports":            lambda: _page_reports(user, idx_dir),
-        "Audit Trail":        lambda: _page_audit_trail(user, idx_dir),
-        "Settings":           lambda: _page_settings(user, idx_dir),
-        "Help":               lambda: _page_help(user),
-    }
-    dispatch.get(page, lambda: _page_home(user, idx_dir, pdf_dir))()
+    _dispatch_page(page, user, idx_dir, pdf_dir)
 
 
 def render_journalist_interface(user: dict, idx_dir: Path, pdf_dir: Path) -> None:
     page = _master_shell(user, "nav_journalist", "Journalist Workspace")
-
-    dispatch = {
-        "Home":           lambda: _page_home(user, idx_dir, pdf_dir),
-        "Ask a Question": lambda: _page_ask_question(user, idx_dir, pdf_dir),
-        "My Documents":   lambda: _page_documents(user, idx_dir, pdf_dir),
-        "Fact-Check":     lambda: _page_factcheck(user, idx_dir, pdf_dir),
-        "Reports":        lambda: _page_reports(user, idx_dir),
-        "Audit Trail":    lambda: _page_audit_trail(user, idx_dir),
-        "Settings":       lambda: _page_settings(user, idx_dir),
-    }
-    dispatch.get(page, lambda: _page_home(user, idx_dir, pdf_dir))()
+    _dispatch_page(page, user, idx_dir, pdf_dir)
 
 
 def render_student_dashboard(user: dict, idx_dir: Path, pdf_dir: Path) -> None:
     page = _master_shell(user, "nav_student", "Student Study Workspace")
-
-    dispatch = {
-        "Home":           lambda: _page_home(user, idx_dir, pdf_dir),
-        "Upload PDF":     _page_student_upload,
-        "Summary":        _page_student_summary,
-        "Flashcards":     _page_student_flashcards,
-        "Quiz":           _page_student_quiz,
-        "Videos":         _page_student_videos,
-        "Ask a Question": lambda: _page_ask_question(user, idx_dir, pdf_dir),
-        "Progress":       _page_student_progress,
-        "Settings":       lambda: _page_settings(user, idx_dir),
-    }
-    dispatch.get(page, lambda: _page_home(user, idx_dir, pdf_dir))()
+    _dispatch_page(page, user, idx_dir, pdf_dir)
 
 
 def render_factchecker_interface(user: dict, idx_dir: Path, pdf_dir: Path) -> None:
     page = _master_shell(user, "nav_factchecker", "Fact-Checker Workspace")
-
-    dispatch = {
-        "Home":             lambda: _page_home(user, idx_dir, pdf_dir),
-        "Fact-Check":       lambda: _page_factcheck(user, idx_dir, pdf_dir),
-        "My Documents":     lambda: _page_documents(user, idx_dir, pdf_dir),
-        "Evidence Reports": lambda: _page_reports(user, idx_dir),
-        "Audit Trail":      lambda: _page_audit_trail(user, idx_dir),
-        "Settings":         lambda: _page_settings(user, idx_dir),
-    }
-    dispatch.get(page, lambda: _page_home(user, idx_dir, pdf_dir))()
+    _dispatch_page(page, user, idx_dir, pdf_dir)
 
 
 def render_auditor_dashboard(user: dict, idx_dir: Path, pdf_dir: Path) -> None:
     page = _master_shell(user, "nav_auditor", "Auditor / Admin Workspace")
+    _dispatch_page(page, user, idx_dir, pdf_dir)
+
+
+def _dispatch_page(page: str, user: dict, idx_dir: Path, pdf_dir: Path) -> None:
+    """
+    Single unified dispatch for all roles.
+    Maps new nav page names AND legacy names to their handler functions.
+    """
+    # Import study tabs lazily to avoid circular imports
+    import app as _app
 
     dispatch = {
-        "Home":           lambda: _page_home(user, idx_dir, pdf_dir),
-        "Audit Trail":    lambda: _page_audit_trail(user, idx_dir),
-        "Users & Roles":  lambda: _page_users(user),
-        "Reports":        lambda: _page_reports(user, idx_dir),
-        "Documents":      lambda: _page_documents(user, idx_dir, pdf_dir),
-        "Ask a Question": lambda: _page_ask_question(user, idx_dir, pdf_dir),
-        "Settings":       lambda: _page_settings(user, idx_dir),
+        # New nav names
+        "Overview":        lambda: _page_home(user, idx_dir, pdf_dir),
+        "My PDFs":         lambda: _page_documents(user, idx_dir, pdf_dir),
+        "Ask a question":  lambda: _page_ask_question(user, idx_dir, pdf_dir),
+        "Flashcards":      _app.study_tab_flashcards,
+        "Quiz":            _app.study_tab_quiz,
+        "Videos":          _app.study_tab_videos,
+        "Audit log":       lambda: _page_audit_trail(user, idx_dir),
+        "Users":           lambda: _page_users(user),
+        # Legacy names (kept for backward compat)
+        "Home":            lambda: _page_home(user, idx_dir, pdf_dir),
+        "My Documents":    lambda: _page_documents(user, idx_dir, pdf_dir),
+        "Upload":          lambda: _page_documents(user, idx_dir, pdf_dir),
+        "Upload PDF":      _app.study_tab_upload,
+        "Ask a Question":  lambda: _page_ask_question(user, idx_dir, pdf_dir),
+        "Evidence Explorer": lambda: _page_evidence_explorer(user, idx_dir, pdf_dir),
+        "Reports":         lambda: _page_reports(user, idx_dir),
+        "Audit Trail":     lambda: _page_audit_trail(user, idx_dir),
+        "Fact-Check":      lambda: _page_factcheck(user, idx_dir, pdf_dir),
+        "Media Library":   lambda: _page_media_library(user, idx_dir, pdf_dir),
+        "Summary":         _app.study_tab_summary,
+        "Progress":        _app.study_tab_progress,
+        "Settings":        lambda: _page_settings(user, idx_dir),
+        "Help":            lambda: _page_help(user),
+        "Evidence Reports":lambda: _page_reports(user, idx_dir),
     }
-    dispatch.get(page, lambda: _page_home(user, idx_dir, pdf_dir))()
+    fn = dispatch.get(page or "Overview")
+    if fn:
+        fn()
+    else:
+        _page_home(user, idx_dir, pdf_dir)
