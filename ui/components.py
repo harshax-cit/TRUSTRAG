@@ -253,7 +253,6 @@ NAV_STRUCTURE = {
     },
     "analyst": {
         "Workspace": ["Overview", "My PDFs", "Ask a question"],
-        "Study":     ["Flashcards", "Quiz", "Videos"],
         "Trust":     ["Audit log"],
     },
     "journalist": {
