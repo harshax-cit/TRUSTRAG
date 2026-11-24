@@ -1548,18 +1548,31 @@ def study_tab_upload():
         if st.session_state.study_session_id:
             st.info(f"Session active: `{st.session_state.study_session_id[:8]}…`  "
                     f"({len(st.session_state.study_pdf_names)} file(s) loaded)")
+        else:
+            # Check for existing PDFs that can be processed
+            from pathlib import Path
+            existing_pdfs = list(Path("data/raw/pdfs").glob("*.pdf")) if Path("data/raw/pdfs").exists() else []
+            if existing_pdfs:
+                st.info(f"💡 **{len(existing_pdfs)} existing PDFs found** in data/raw/pdfs/. "
+                        f"Upload any PDF to process all documents together.")
         return
 
+    # ── Process uploaded + existing PDFs ──────────────────────────────────────
     # New session
     sid  = new_session_id()
     dirs = session_dirs(sid)
 
-    progress = st.progress(0.0, text="Validating…")
+    # Find existing PDFs in data/raw/pdfs
+    from pathlib import Path
+    existing_pdf_paths = list(Path("data/raw/pdfs").glob("*.pdf"))
+    
+    progress = st.progress(0.0, text="Preparing…")
     errors   = []
     saved    = []
 
+    # First, save uploaded files
     for i, uf in enumerate(uploaded):
-        pct = (i / len(uploaded)) * 0.3
+        pct = (i / len(uploaded)) * 0.1
         progress.progress(pct, text=f"Validating {uf.name}…")
         data = uf.read()
         try:
@@ -1570,27 +1583,45 @@ def study_tab_upload():
         except UploadError as e:
             errors.append(f"**{uf.name}**: {e}")
 
+    # Also copy existing PDFs to session
+    st.info(f"📚 Processing {len(uploaded)} uploaded + {len(existing_pdf_paths)} existing PDFs...")
+    for existing_pdf in existing_pdf_paths:
+        try:
+            import shutil
+            dest = dirs["pdfs"] / existing_pdf.name
+            if not dest.exists():
+                shutil.copy(str(existing_pdf), str(dest))
+                saved.append(existing_pdf.name)
+        except Exception as e:
+            st.warning(f"Could not copy {existing_pdf.name}: {e}")
+
     if errors:
         for err in errors:
             st.error(err)
         if not saved:
             return
 
-    # ── Step 1: Index the PDF ────────────────────────────────────────────────
-    progress.progress(0.35, text="Indexing PDF (extracting text, tables, charts)…")
+    # ── Step 1: Index all PDFs ───────────────────────────────────────────────
+    progress.progress(0.20, text=f"Indexing {len(saved)} PDFs…")
     try:
         import logging
         logging.getLogger("tracerag.ingest").setLevel(logging.WARNING)
-        manifest = ingest_session_pdf(sid, saved[0])
-        progress.progress(0.55, text=f"Indexed {saved[0]}…")
+        
+        # Index all PDFs at once
+        for i, fname in enumerate(saved):
+            pct = 0.20 + (i / len(saved)) * 0.30
+            progress.progress(pct, text=f"Indexing {fname}…")
+            manifest = ingest_session_pdf(sid, fname)
+        
+        progress.progress(0.50, text=f"Indexed {len(saved)} files")
     except Exception as e:
         st.error(f"❌ Indexing failed: {e}")
         import traceback
         st.code(traceback.format_exc(), language="python")
         return
 
-    # ── Step 2: Extract topics ────────────────────────────────────────────────
-    progress.progress(0.60, text="Extracting topics…")
+    # ── Step 2: Extract topics from all PDFs ─────────────────────────────────
+    progress.progress(0.55, text="Extracting topics…")
     from study.topics import extract_topics
     from study.summarise import summarise_topic
     from study.flashcards import generate_cards
@@ -1608,7 +1639,7 @@ def study_tab_upload():
             if not t:
                 st.warning(f"⚠️ No topics found in {fname}. Using full document as one topic.")
                 t = [{
-                    "id": "t00", "title": fname.replace(".pdf",""),
+                    "id": f"t00_{fname[:10]}", "title": fname.replace(".pdf",""),
                     "page_start": 1, "page_end": 999,
                     "source": "fallback", "region_ids": [], "page_texts": {},
                 }]
@@ -1616,6 +1647,7 @@ def study_tab_upload():
                 from study.topics import _attach_regions
                 t = _attach_regions(t, reg_jsonl)
             topics.extend(t)
+            st.success(f"✓ {fname}: {len(t)} topics extracted")
         except Exception as e:
             st.error(f"❌ Topic extraction failed for {fname}: {e}")
             continue
@@ -1663,9 +1695,16 @@ def study_tab_upload():
     from study.ai_generate import _can_use_api, get_ai_label
     ai_note = f" · {get_ai_label()}" if _can_use_api() else " · Offline mode"
     st.success(
-        f"✅ **{saved[0]}** indexed successfully!  \n"
+        f"✅ **{len(saved)} PDFs** processed successfully!  \n"
         f"**{len(topics)}** topics · **{len(all_cards)}** cards{ai_note}"
     )
+    
+    # Show all processed files
+    with st.expander("📄 Processed files"):
+        for fname in saved:
+            fname_topics = [t for t in topics if fname in t.get("title", "")]
+            fname_cards = [c for c in all_cards if c.get("doc", "").endswith(fname)]
+            st.markdown(f"- **{fname}**: {len(fname_topics)} topics, {len(fname_cards)} cards")
 
     # OCR warning
     for doc, stats in get_ocr_stats(sid).items():
