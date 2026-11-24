@@ -281,6 +281,9 @@ div.stButton > button:not([kind="primary"]):hover {
 </style>
 """
 
+# Export for tests
+ENTERPRISE_CSS = _CSS
+
 # ── Role definitions ──────────────────────────────────────────────────────────
 ROLES = {
     "Government": {
