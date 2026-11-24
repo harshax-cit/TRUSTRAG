@@ -1142,8 +1142,8 @@ def _dispatch_page(page: str, user: dict, idx_dir: Path, pdf_dir: Path) -> None:
     
     role = user.get("role", "analyst")
 
-    # For student role, "My PDFs" goes to study upload, not document library
-    if role == "student" and page == "My PDFs":
+    # For student AND analyst roles, "My PDFs" goes to study upload
+    if role in ["student", "analyst"] and page == "My PDFs":
         _app.study_tab_upload()
         return
 

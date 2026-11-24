@@ -141,5 +141,38 @@
     "chart_pages": 5,
     "fact_count": 63,
     "region_count": 455
+  },
+  "doc-3.pdf": {
+    "doc": "doc-3.pdf",
+    "sha256": "d18180e56b559b48fe9939468af36913927549b9205a49a7cee246f905759c12",
+    "pages": 1,
+    "text_pages": 1,
+    "scan_pages": 0,
+    "table_pages": 1,
+    "chart_pages": 0,
+    "fact_count": 20,
+    "region_count": 46
+  },
+  "Case Study 2_IDV_Battery_Energy_System.pdf": {
+    "doc": "Case Study 2_IDV_Battery_Energy_System.pdf",
+    "sha256": "580fb527f99841c15f34576b91dcce4f397837d0d385873c291e50afbccc7105",
+    "pages": 3,
+    "text_pages": 2,
+    "scan_pages": 1,
+    "table_pages": 1,
+    "chart_pages": 0,
+    "fact_count": 10,
+    "region_count": 22
+  },
+  "SEVA_FIRST_Hackathon_HARSHA.pdf": {
+    "doc": "SEVA_FIRST_Hackathon_HARSHA.pdf",
+    "sha256": "c0417aa0bafec2e03265e9388f3ca86014c3d4f12b1e646a4470d852e6e9cadf",
+    "pages": 14,
+    "text_pages": 14,
+    "scan_pages": 0,
+    "table_pages": 3,
+    "chart_pages": 1,
+    "fact_count": 73,
+    "region_count": 65
   }
 }
