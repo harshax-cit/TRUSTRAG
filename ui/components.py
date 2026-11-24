@@ -74,11 +74,12 @@ def pill_html(text: str, tone: str = "gray") -> None:
 def metric_tile(label: str, value: str, caption: str = "",
                 col=None) -> None:
     """Render a metric tile. Pass col to render inside an st.column."""
+    cap_html = f"<div class='tr-metric-cap'>{caption}</div>" if caption else ""
     html = f"""
     <div class="tr-metric">
         <div class="tr-metric-label">{label}</div>
         <div class="tr-metric-value">{value}</div>
-        {"<div class='tr-metric-cap'>" + caption + "</div>" if caption else ""}
+        {cap_html}
     </div>
     """
     if col:
