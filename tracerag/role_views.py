@@ -664,8 +664,8 @@ def _inline_upload(user: dict, idx_dir: Path, pdf_dir: Path) -> None:
             import logging
             logging.getLogger("tracerag.ingest").setLevel(logging.WARNING)
             # Index only the new file, not rebuild entire index
-            from tracerag.ingest import ingest_pdf
-            ingest_pdf(str(dest), str(idx_dir), force=True)
+            from tracerag.ingest import ingest_single_pdf
+            ingest_single_pdf(str(dest), str(idx_dir))
             register_document(uf.name, user["username"], user.get("role", "analyst"),
                                sha, len(data), "pdf",
                                is_government=(user.get("role") == "government"))
