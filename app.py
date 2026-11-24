@@ -1479,7 +1479,18 @@ def _show_login():
 
 
 def study_tab_upload():
+    """
+    My PDFs upload page — redesigned with 5-step stepper, drag-drop card,
+    OCR confidence warnings, topic cards, delete confirmation.
+    """
     _study_session_state()
+    
+    try:
+        from ui.components import page_header, stepper, empty_state, progress_bar
+        _new_ui = True
+    except ImportError:
+        _new_ui = False
+    
     from study.upload import (
         new_session_id, session_dirs, validate_pdf, save_upload,
         ingest_session_pdf, sha256_of, log_upload, delete_session,
@@ -1487,174 +1498,227 @@ def study_tab_upload():
         MAX_UPLOAD_MB, MAX_PAGES,
     )
 
-    st.subheader("📤 Upload Your PDF")
+    if _new_ui:
+        page_header("My PDFs", "Upload and process your documents")
+    else:
+        st.subheader("📤 Upload Your PDF")
+    
     st.caption(
-        f"Max {MAX_UPLOAD_MB} MB · Max {MAX_PAGES} pages · "
-        "No password-protected or JavaScript-containing files."
+        f"Allowed: PDF up to {MAX_UPLOAD_MB} MB, {MAX_PAGES} pages max. "
+        "No password-protected files."
     )
 
-    # Auto-cleanup expired sessions
     cleanup_expired_sessions()
 
+    # Drag-drop uploader card
+    if _new_ui:
+        st.markdown('<div class="tr-card">', unsafe_allow_html=True)
+        st.markdown("**Upload documents**")
+    
     uploaded = st.file_uploader(
         "Choose one or more PDFs",
         type=["pdf"],
         accept_multiple_files=True,
+        label_visibility="collapsed" if _new_ui else "visible",
     )
+    
+    if _new_ui:
+        st.markdown('</div>', unsafe_allow_html=True)
 
     col1, col2 = st.columns([3, 1])
     with col1:
-        process_btn = st.button("Process PDFs ▶", type="primary",
-                                width="stretch",
-                                disabled=not uploaded)
+        process_btn = st.button(
+            "Process PDFs",
+            type="primary",
+            use_container_width=True,
+            disabled=not uploaded,
+        )
     with col2:
-        delete_btn = st.button("🗑 Delete my files",
-                               width="stretch",
-                               disabled=st.session_state.study_session_id is None)
+        delete_btn = st.button(
+            "Delete my files",
+            use_container_width=True,
+            disabled=st.session_state.study_session_id is None,
+        )
 
     if delete_btn and st.session_state.study_session_id:
-        delete_session(st.session_state.study_session_id)
-        for k in list(st.session_state.keys()):
-            if k.startswith("study_"):
-                del st.session_state[k]
-        _study_session_state()
-        st.success("Files deleted.")
-        st.rerun()
+        with st.expander("⚠ Confirm deletion", expanded=True):
+            st.warning("This will delete all uploaded files, topics, flashcards and progress.")
+            if st.button("Yes, delete everything", type="primary"):
+                delete_session(st.session_state.study_session_id)
+                for k in list(st.session_state.keys()):
+                    if k.startswith("study_"):
+                        del st.session_state[k]
+                _study_session_state()
+                st.success("Files deleted.")
+                st.rerun()
+        return
 
     if not process_btn or not uploaded:
         if st.session_state.study_session_id:
-            st.info(f"Session active: `{st.session_state.study_session_id[:8]}…`  "
-                    f"({len(st.session_state.study_pdf_names)} file(s) loaded)")
+            st.info(f"Session active: {len(st.session_state.study_pdf_names)} file(s) loaded")
         return
 
-    # New session
+    # ── Processing with 5-step stepper ────────────────────────────────────────
+    stages = ["Validate", "Parse", "OCR", "Extract", "Summarise"]
+    current_stage = 0
+    
+    if _new_ui:
+        stepper(stages, current_stage)
+    
     sid  = new_session_id()
     dirs = session_dirs(sid)
+    errors = []
+    saved  = []
 
-    progress = st.progress(0.0, text="Validating…")
-    errors   = []
-    saved    = []
-
+    # Stage 0: Validate
+    st.write("**Step 1/5: Validate**")
     for i, uf in enumerate(uploaded):
-        pct = (i / len(uploaded)) * 0.3
-        progress.progress(pct, text=f"Validating {uf.name}…")
         data = uf.read()
         try:
             validate_pdf(data, uf.name)
             save_upload(sid, uf.name, data)
             log_upload(sid, uf.name, sha256_of(data), str(dirs["index"]))
             saved.append(uf.name)
+            st.success(f"✓ {uf.name}")
         except UploadError as e:
             errors.append(f"**{uf.name}**: {e}")
+            st.error(f"✗ {uf.name}: {e}")
 
-    if errors:
-        for err in errors:
-            st.error(err)
-        if not saved:
-            return
+    if not saved:
+        st.error("No valid files to process.")
+        return
 
-    # ── Step 1: Index the PDF ────────────────────────────────────────────────
-    progress.progress(0.35, text="Indexing PDF (extracting text, tables, charts)…")
+    # Stage 1: Parse
+    current_stage = 1
+    if _new_ui:
+        stepper(stages, current_stage)
+    st.write("**Step 2/5: Parse**")
+    st.caption("Extracting text, tables, charts and images…")
+    
     try:
         import logging
         logging.getLogger("tracerag.ingest").setLevel(logging.WARNING)
         manifest = ingest_session_pdf(sid, saved[0])
-        progress.progress(0.55, text=f"Indexed {saved[0]}…")
+        st.success(f"✓ Parsed {saved[0]}")
     except Exception as e:
-        st.error(f"❌ Indexing failed: {e}")
-        import traceback
-        st.code(traceback.format_exc(), language="python")
+        st.error(f"Parse failed: {e}")
         return
 
-    # ── Step 2: Extract topics ────────────────────────────────────────────────
-    progress.progress(0.60, text="Extracting topics…")
+    # Stage 2: OCR (check confidence)
+    current_stage = 2
+    if _new_ui:
+        stepper(stages, current_stage)
+    st.write("**Step 3/5: OCR**")
+    
+    ocr_stats = get_ocr_stats(str(dirs["index"]))
+    has_scans = ocr_stats.get("contains_scans", False)
+    ocr_conf  = ocr_stats.get("ocr_confidence", 1.0)
+    
+    if has_scans:
+        if ocr_conf < 0.80:
+            st.warning(
+                f"⚠ OCR confidence is {ocr_conf:.0%}. "
+                "Scanned pages may have errors. Consider rescanning at higher resolution."
+            )
+        else:
+            st.success(f"✓ Scanned pages detected, OCR confidence {ocr_conf:.0%}")
+    else:
+        st.info("No scanned pages detected (native digital PDF)")
+
+    # Stage 3: Extract topics
+    current_stage = 3
+    if _new_ui:
+        stepper(stages, current_stage)
+    st.write("**Step 4/5: Extract topics**")
+    
     from study.topics import extract_topics
-    from study.summarise import summarise_topic
-    from study.flashcards import generate_cards
-    from study.leitner import LeitnerDeck
-
-    topics    = []
-    summaries = {}
-    all_cards = []
-
+    topics = []
+    
     for fname in saved:
         pdf_path  = str(dirs["pdfs"] / fname)
         reg_jsonl = str(dirs["index"] / "regions.jsonl")
         try:
             t = extract_topics(pdf_path, reg_jsonl)
             if not t:
-                st.warning(f"⚠️ No topics found in {fname}. Using full document as one topic.")
+                st.warning(f"No topics found in {fname}. Using full document.")
                 t = [{
                     "id": "t00", "title": fname.replace(".pdf",""),
                     "page_start": 1, "page_end": 999,
                     "source": "fallback", "region_ids": [], "page_texts": {},
                 }]
-                # Attach all regions to the fallback topic
                 from study.topics import _attach_regions
                 t = _attach_regions(t, reg_jsonl)
             topics.extend(t)
+            st.success(f"✓ Extracted {len(t)} topic(s) from {fname}")
         except Exception as e:
-            st.error(f"❌ Topic extraction failed for {fname}: {e}")
+            st.error(f"Topic extraction failed for {fname}: {e}")
             continue
 
     if not topics:
-        st.error("❌ Could not extract any topics. Please try a different PDF.")
+        st.error("Could not extract any topics.")
         return
 
-    progress.progress(0.70, text=f"Building summaries for {len(topics)} topics…")
-
-    # ── Step 3: Summarise + generate cards ───────────────────────────────────
-    for idx, topic in enumerate(topics):
-        pct = 0.70 + (idx / max(len(topics), 1)) * 0.25
-        progress.progress(pct, text=f"Summarising: {topic['title'][:40]}…")
+    # Stage 4: Summarise
+    current_stage = 4
+    if _new_ui:
+        stepper(stages, current_stage)
+    st.write("**Step 5/5: Summarise & generate flashcards**")
+    
+    from study.summarise import summarise_topic
+    from study.flashcards import generate_cards
+    from study.leitner import LeitnerDeck
+    
+    summaries = {}
+    all_cards = []
+    
+    for topic in topics:
+        tid   = topic["id"]
+        title = topic.get("title", "Untitled")
         try:
-            s = summarise_topic(topic, str(dirs["index"]), saved[0])
-            summaries[topic["id"]] = s
-        except Exception as e:
-            st.warning(f"⚠️ Summary failed for '{topic['title']}': {e}")
-            summaries[topic["id"]] = {"title": topic["title"], "bullets": [], "key_numbers": []}
-
-        try:
-            cards = generate_cards(
-                topic, summaries[topic["id"]],
-                str(dirs["index"]), saved[0],
-                str(dirs["pdfs"] / saved[0])
-            )
+            summ = summarise_topic(topic, str(dirs["pdfs"] / saved[0]))
+            summaries[tid] = summ
+            cards = generate_cards(topic, summ)
             all_cards.extend(cards)
+            st.success(f"✓ {title}: {len(cards)} flashcard(s)")
         except Exception as e:
-            st.warning(f"⚠️ Card generation failed for '{topic['title']}': {e}")
+            st.warning(f"⚠ Could not summarise {title}: {e}")
 
-    # ── Step 4: Store results ─────────────────────────────────────────────────
-    deck = LeitnerDeck(all_cards) if all_cards else LeitnerDeck([])
-    st.session_state.study_session_id = sid
-    st.session_state.study_dirs       = dirs
-    st.session_state.study_manifest   = manifest
-    st.session_state.study_topics     = topics
-    st.session_state.study_summaries  = summaries
-    st.session_state.study_cards      = all_cards
-    st.session_state.study_leitner    = deck
-    st.session_state.study_pdf_names  = saved
-
-    progress.progress(1.0, text="Done!")
-
-    from study.ai_generate import _can_use_api, get_ai_label
-    ai_note = f" · {get_ai_label()}" if _can_use_api() else " · Offline mode"
-    st.success(
-        f"✅ **{saved[0]}** indexed successfully!  \n"
-        f"**{len(topics)}** topics · **{len(all_cards)}** cards{ai_note}"
-    )
-
-    # OCR warning
-    for doc, stats in get_ocr_stats(sid).items():
-        if stats["mean_confidence"] < 0.80:
-            st.warning(
-                f"⚠️ **{doc}** is a scanned PDF — "
-                f"OCR confidence: {stats['mean_confidence']:.0%}. "
-                f"Low-confidence pages: {stats['low_pages'] or 'none'}."
-            )
-
-
-# ── Tab: Summary ─────────────────────────────────────────────────────────────
+    # Save to session state
+    st.session_state.study_session_id  = sid
+    st.session_state.study_pdf_names   = saved
+    st.session_state.study_topics      = topics
+    st.session_state.study_summaries   = summaries
+    st.session_state.study_all_cards   = all_cards
+    
+    # Save cards to Leitner deck
+    deck = LeitnerDeck()
+    for card in all_cards:
+        deck.add_card(card)
+    
+    st.success(f"✅ Done! {len(topics)} topics, {len(all_cards)} flashcards created.")
+    st.balloons()
+    
+    # Show topic cards
+    st.markdown("<div style='height:1rem;'></div>", unsafe_allow_html=True)
+    st.markdown("**Topics found:**")
+    
+    for topic in topics[:6]:
+        title = topic.get("title", "")
+        p_start = topic.get("page_start", 1)
+        p_end   = topic.get("page_end", 1)
+        page_range = f"p.{p_start}–{p_end}" if p_start != p_end else f"p.{p_start}"
+        
+        if _new_ui:
+            st.markdown(f"""
+            <div class="tr-card-sm">
+                <div style="font-weight:600;font-size:14px;color:#0B1F33;margin-bottom:0.25rem;">
+                    {title}
+                </div>
+                <div style="font-size:12px;color:#5B6878;">{page_range}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"**{title}** · {page_range}")
 
 def study_tab_summary():
     _study_session_state()
@@ -1700,111 +1764,207 @@ def study_tab_summary():
 # ── Tab: Flashcards ──────────────────────────────────────────────────────────
 
 def study_tab_flashcards():
+    """
+    Flashcards page — redesigned with large card, flip animation (CSS),
+    difficulty badge, progress ring per topic, filters, Leitner box indicator,
+    export menu.
+    """
     _study_session_state()
-    st.subheader("🃏 Flashcards")
+    
+    try:
+        from ui.components import page_header, source_chip, badge, pill, empty_state, progress_bar
+        _new_ui = True
+    except ImportError:
+        _new_ui = False
+    
+    if _new_ui:
+        page_header("Flashcards", "Review and master your study material")
+    else:
+        st.subheader("🃏 Flashcards")
 
     cards = st.session_state.study_cards
     dirs  = st.session_state.study_dirs
 
     if not cards:
-        st.info("Upload a PDF first (Upload tab).")
+        if _new_ui:
+            empty_state("No flashcards yet", "Upload a PDF to generate cards")
+        else:
+            st.info("Upload a PDF first (Upload tab).")
         return
 
     from study.ai_generate import _can_use_api
+    from study.leitner import LeitnerDeck, get_box_counts
+    
     ai_count = sum(1 for c in cards if c.get("source") == "ai")
     ext_count = len(cards) - ai_count
+    verified_count = sum(1 for c in cards if c.get("verified"))
+    
     if _can_use_api() and ai_count > 0:
-        st.success(f"☁️ {ai_count} AI-generated cards + 📚 {ext_count} extractive cards")
+        st.caption(f"{ai_count} AI-generated + {ext_count} extractive · {verified_count} of {len(cards)} verified")
     else:
-        st.caption(f"📚 {ext_count} extractive cards (offline mode)")
-
-    topics    = st.session_state.study_topics
-    topic_map = {t["id"]: t["title"] for t in topics}
+        st.caption(f"{ext_count} extractive cards · {verified_count} verified")
 
     # Filters
-    col1, col2, col3 = st.columns(3)
+    topics = st.session_state.study_topics
+    topic_map = {t["id"]: t["title"] for t in topics}
+    
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
-        topic_filter = st.selectbox(
-            "Filter by topic",
-            ["All"] + list(topic_map.values()),
-        )
+        topic_filter = st.selectbox("Topic", ["All"] + list(topic_map.values()))
     with col2:
         diff_filter = st.selectbox("Difficulty", ["All", "easy", "medium", "hard"])
     with col3:
-        type_filter = st.selectbox("Type", ["All", "concept", "key_number", "cloze"])
+        shuffle = st.toggle("Shuffle", value=False)
+    with col4:
+        if st.button("Export", use_container_width=True):
+            st.session_state["show_export_menu"] = True
 
-    shuffle = st.toggle("Shuffle", value=False)
+    # Export menu
+    if st.session_state.get("show_export_menu"):
+        with st.expander("📥 Export flashcards", expanded=True):
+            fmt = st.radio("Format", ["CSV", "Anki TSV", "PDF"], horizontal=True)
+            if st.button(f"Download as {fmt}", type="primary"):
+                from study.export import export_flashcards
+                data = export_flashcards(cards, fmt.lower())
+                st.download_button(
+                    f"Download {fmt}",
+                    data,
+                    f"flashcards.{fmt.lower()}",
+                    type="primary",
+                )
+                st.session_state["show_export_menu"] = False
 
     filtered = [c for c in cards
                 if (topic_filter == "All" or topic_map.get(c["topic_id"]) == topic_filter)
-                and (diff_filter == "All" or c.get("difficulty") == diff_filter)
-                and (type_filter == "All" or c.get("type") == type_filter)]
+                and (diff_filter == "All" or c.get("difficulty") == diff_filter)]
 
     if shuffle:
         import random
         random.shuffle(filtered)
 
     if not filtered:
-        st.info("No cards match the selected filters.")
+        if _new_ui:
+            empty_state("No cards match filters")
+        else:
+            st.info("No cards match the selected filters.")
         return
 
-    st.caption(f"{len(filtered)} card(s) shown")
+    st.caption(f"{len(filtered)} card(s)")
 
-    for card in filtered:
+    # Progress ring per topic
+    if _new_ui and topics:
+        st.markdown("**Progress by topic**")
+        for topic in topics[:4]:
+            tid = topic["id"]
+            title = topic.get("title", "")
+            topic_cards = [c for c in cards if c.get("topic_id") == tid]
+            mastered = sum(1 for c in topic_cards if c.get("mastered"))
+            pct = mastered / len(topic_cards) if topic_cards else 0
+            st.markdown(f"""
+            <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">
+                <div style="flex:1;">
+                    <div style="font-size:13px;font-weight:600;color:#0B1F33;">{title}</div>
+                    <div style="font-size:11px;color:#5B6878;">{mastered}/{len(topic_cards)} mastered</div>
+                </div>
+                <div style="width:48px;height:48px;border-radius:50%;border:4px solid #DDE5EC;
+                            background:conic-gradient(#0F7C7E {pct*100}%, #DDE5EC 0);
+                            display:flex;align-items:center;justify-content:center;
+                            font-size:11px;font-weight:700;color:#0B1F33;">
+                    {int(pct*100)}%
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown("<div style='height:1rem;'></div>", unsafe_allow_html=True)
+
+    # Card carousel (large card, max 640px)
+    if "flashcard_idx" not in st.session_state:
+        st.session_state.flashcard_idx = 0
+    idx = st.session_state.flashcard_idx % len(filtered)
+    card = filtered[idx]
+
+    # Leitner box indicator
+    deck = LeitnerDeck()
+    box_num = deck.get_card_box(card.get("id", ""))
+    
+    if _new_ui:
+        st.markdown(f"""
+        <div style="max-width:640px;margin:0 auto;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+                <div style="font-size:12px;color:#5B6878;">Card {idx+1} of {len(filtered)}</div>
+                <div class="tr-pill tr-badge-gray" style="font-size:11px;">
+                    Leitner Box {box_num}
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Flip state
+    if "card_flipped" not in st.session_state:
+        st.session_state.card_flipped = False
+
+    # Card (note: Streamlit doesn't support CSS 3D transform interactivity,
+    # so we use a toggle instead of true flip animation)
+    if _new_ui:
+        st.markdown("""
+        <div style="max-width:640px;margin:0 auto;">
+            <div class="tr-card-navy" style="min-height:240px;padding:2rem;">
+        """, unsafe_allow_html=True)
+        
+        if not st.session_state.card_flipped:
+            st.markdown(f'<div class="tr-flashcard-q">{card["front"]}</div>',
+                        unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="tr-flashcard-a">{card["back"]}</div>',
+                        unsafe_allow_html=True)
+            st.markdown("<div style='height:0.75rem;'></div>", unsafe_allow_html=True)
+            if _new_ui and card.get("doc") and card.get("page"):
+                st.markdown(source_chip(card["doc"], card["page"], card.get("verified", False)),
+                            unsafe_allow_html=True)
+            # Difficulty badge
+            diff = card.get("difficulty", "medium")
+            diff_colors = {"easy": "teal", "medium": "amber", "hard": "gray"}
+            st.markdown(f'<div style="margin-top:0.5rem;">{pill(diff.capitalize(), diff_colors.get(diff, "gray"))}</div>',
+                        unsafe_allow_html=True)
+        
+        st.markdown("</div></div>", unsafe_allow_html=True)
+    else:
         with st.container(border=True):
-            col_q, col_flip = st.columns([9, 1])
-            with col_q:
+            if not st.session_state.card_flipped:
                 st.markdown(f"**{card['front']}**")
-                st.caption(
-                    f"{card.get('type','')} · {card.get('difficulty','')} · "
-                    f"p.{card.get('page','?')}"
-                )
-            with col_flip:
-                flipped = st.session_state.study_flip.get(card["id"], False)
-                if st.button("↩" if flipped else "👁", key=f"flip_{card['id']}"):
-                    st.session_state.study_flip[card["id"]] = not flipped
-                    st.rerun()
+            else:
+                st.markdown(f"**{card['back']}**")
+                st.caption(f"{card.get('doc','')} · p.{card.get('page','')} · {card.get('difficulty','')}")
 
-            if st.session_state.study_flip.get(card["id"]):
-                st.success(f"**Answer:** {card['back']}")
-                if not card.get("verified"):
-                    st.warning("⚠️ This number could not be verified in the source.")
+    # Controls
+    c1, c2, c3 = st.columns([1,1,1])
+    with c1:
+        if st.button("← Previous", use_container_width=True,
+                     disabled=idx==0):
+            st.session_state.flashcard_idx -= 1
+            st.session_state.card_flipped = False
+            st.rerun()
+    with c2:
+        flip_label = "Show answer" if not st.session_state.card_flipped else "Show question"
+        if st.button(flip_label, type="primary", use_container_width=True):
+            st.session_state.card_flipped = not st.session_state.card_flipped
+            st.rerun()
+    with c3:
+        if st.button("Next →", use_container_width=True,
+                     disabled=idx==len(filtered)-1):
+            st.session_state.flashcard_idx += 1
+            st.session_state.card_flipped = False
+            st.rerun()
 
-                deck = st.session_state.study_leitner
-                if deck:
-                    col_k, col_r = st.columns(2)
-                    with col_k:
-                        if st.button("✅ I knew it", key=f"knew_{card['id']}"):
-                            deck.answer(card["id"], True)
-                    with col_r:
-                        if st.button("🔁 Review again", key=f"review_{card['id']}"):
-                            deck.answer(card["id"], False)
-
-                if st.button("📄 Show source", key=f"show_{card['id']}"):
-                    _render_source(
-                        card.get("doc", ""), card.get("page"),
-                        card.get("bbox"), dirs
-                    )
-
-            st.divider()
-
-    # Exports
-    st.markdown("#### 📥 Export")
-    from study.export import to_csv, to_anki_tsv, to_pdf as cards_to_pdf
-    ec1, ec2, ec3 = st.columns(3)
-    with ec1:
-        st.download_button("CSV", to_csv(filtered),
-                           "flashcards.csv", "text/csv")
-    with ec2:
-        st.download_button("Anki TSV", to_anki_tsv(filtered),
-                           "flashcards.tsv", "text/tab-separated-values")
-    with ec3:
-        st.download_button("Print PDF",
-                           cards_to_pdf(filtered, "My Flashcards"),
-                           "flashcards.pdf", "application/pdf")
-
-
-# ── Tab: Quiz ────────────────────────────────────────────────────────────────
+    # Leitner progress
+    if _new_ui:
+        box_counts = get_box_counts()
+        total = sum(box_counts.values())
+        if total:
+            learned = box_counts.get(4,0) + box_counts.get(5,0)
+            pct = learned / total
+            st.markdown("<div style='height:1rem;'></div>", unsafe_allow_html=True)
+            progress_bar(pct, f"Overall progress: {learned}/{total} mastered")
 
 def study_tab_quiz():
     _study_session_state()
