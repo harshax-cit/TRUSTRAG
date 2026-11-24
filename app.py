@@ -1601,19 +1601,18 @@ def study_tab_upload():
         if not saved:
             return
 
-    # ── Step 1: Index all PDFs ───────────────────────────────────────────────
-    progress.progress(0.20, text=f"Indexing {len(saved)} PDFs…")
+    # ── Step 1: Index all PDFs (do it once for all files) ────────────────────
+    progress.progress(0.20, text=f"Indexing {len(saved)} PDFs (this may take 2-5 minutes)...")
+    st.info(f"⏳ Indexing {len(saved)} PDFs together. Please wait, this takes time for large documents.")
+    
     try:
         import logging
         logging.getLogger("tracerag.ingest").setLevel(logging.WARNING)
         
-        # Index all PDFs at once
-        for i, fname in enumerate(saved):
-            pct = 0.20 + (i / len(saved)) * 0.30
-            progress.progress(pct, text=f"Indexing {fname}…")
-            manifest = ingest_session_pdf(sid, fname)
+        # Index ALL PDFs at once (not one by one)
+        manifest = ingest_session_pdf(sid, saved[0])  # This processes the whole directory
         
-        progress.progress(0.50, text=f"Indexed {len(saved)} files")
+        progress.progress(0.50, text=f"✓ Indexed {len(saved)} files")
     except Exception as e:
         st.error(f"❌ Indexing failed: {e}")
         import traceback
