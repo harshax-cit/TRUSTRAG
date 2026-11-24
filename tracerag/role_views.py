@@ -1139,6 +1139,13 @@ def _dispatch_page(page: str, user: dict, idx_dir: Path, pdf_dir: Path) -> None:
     """
     # Import study tabs lazily to avoid circular imports
     import app as _app
+    
+    role = user.get("role", "analyst")
+
+    # For student role, "My PDFs" goes to study upload, not document library
+    if role == "student" and page == "My PDFs":
+        _app.study_tab_upload()
+        return
 
     dispatch = {
         # New nav names
