@@ -196,6 +196,8 @@ def _page_home(user: dict, idx_dir: Path, pdf_dir: Path) -> None:
     """
     Overview (dashboard) page.
     New design: serif title, metric tiles, continue studying card, topics, recent answers, videos.
+    Student role: shows study data (cards, topics from study session)
+    Other roles: shows documents, facts, audit data
     """
     role = user.get("role", "analyst")
     is_gov = role == "government"
@@ -221,136 +223,156 @@ def _page_home(user: dict, idx_dir: Path, pdf_dir: Path) -> None:
             "Search, analyse, and verify information from documents and reports.",
         )
 
-    # Four metric tiles
-    try:
-        manifest   = load_manifest(str(idx_dir))
-        total_docs = len(manifest)
-        scanned    = sum(1 for v in manifest.values() if v.get("contains_scans"))
-        total_facts= sum(v.get("fact_count", 0) for v in manifest.values())
-        # OCR confidence (average across scanned docs)
-        ocr_confs  = [v.get("ocr_confidence", 1.0)
-                      for v in manifest.values() if v.get("contains_scans")]
-        ocr_avg    = sum(ocr_confs) / len(ocr_confs) if ocr_confs else 1.0
+    # Four metric tiles - different for student vs other roles
+    is_student = (role == "student")
+    
+    if is_student:
+        # Student: show study metrics (cards, topics, quiz)
+        try:
+            cards_due = 0
+            quiz_avg  = 0
+            topics_found = 0
+            total_docs = 0
+            
+            # Get from study session if available
+            if st.session_state.get("study_topics"):
+                topics_found = len(st.session_state.study_topics)
+            if st.session_state.get("study_pdf_names"):
+                total_docs = len(st.session_state.study_pdf_names)
+            if st.session_state.get("study_all_cards"):
+                cards_due = len([c for c in st.session_state.study_all_cards 
+                                if not c.get("mastered")])
+            quiz_avg = st.session_state.get("quiz_avg", 0)
+        except Exception:
+            total_docs = topics_found = cards_due = quiz_avg = 0
         
-        audit       = AuditLog(str(idx_dir))
-        audit_ok, _ = audit.verify_chain()
-        refusals    = len(get_refusal_ledger(str(idx_dir)))
-    except Exception:
-        total_docs = scanned = total_facts = refusals = 0
-        ocr_avg = 1.0
-        audit_ok = True
-
-    # Try to get study stats (cards due, quiz average, topics)
-    cards_due = 0
-    quiz_avg  = 0
-    topics_found = 0
-    try:
-        from study.leitner import get_due_cards
-        from study.topics import get_topics
-        cards_due = len(get_due_cards())
-        topics_found = len(get_topics())
-        # Quiz average from session state or storage
-        quiz_avg = st.session_state.get("quiz_avg", 0)
-    except Exception:
-        pass
-
-    if _NEW_UI:
-        c1, c2, c3, c4 = st.columns(4)
-        metric_tile("Documents",
-                    str(total_docs),
-                    f"{scanned} scanned · OCR {ocr_avg:.0%}" if scanned else "",
-                    col=c1)
-        metric_tile("Topics found",
-                    str(topics_found),
-                    col=c2)
-        metric_tile("Cards due today",
-                    str(cards_due),
-                    col=c3)
-        metric_tile("Quiz average",
-                    f"{quiz_avg}%" if quiz_avg else "—",
-                    col=c4)
+        if _NEW_UI:
+            c1, c2, c3, c4 = st.columns(4)
+            metric_tile("Documents", str(total_docs), col=c1)
+            metric_tile("Topics found", str(topics_found), col=c2)
+            metric_tile("Cards due today", str(cards_due), col=c3)
+            metric_tile("Quiz average", f"{quiz_avg}%" if quiz_avg else "—", col=c4)
+        else:
+            stat_row([
+                {"label": "Documents",     "value": str(total_docs)},
+                {"label": "Topics",        "value": str(topics_found)},
+                {"label": "Cards due",     "value": str(cards_due)},
+                {"label": "Quiz average",  "value": f"{quiz_avg}%" if quiz_avg else "—"},
+            ])
     else:
-        stat_row([
-            {"label": "Documents",     "value": str(total_docs)},
-            {"label": "Indexed Facts", "value": f"{total_facts:,}"},
-            {"label": "Audit Chain",   "value": "Intact" if audit_ok else "⚠ Broken",
-             "color": COLORS["success_text"] if audit_ok else COLORS["danger_text"]},
-            {"label": "Refusals",      "value": str(refusals)},
-        ])
+        # Other roles: show document/fact metrics
+        try:
+            manifest   = load_manifest(str(idx_dir))
+            total_docs = len(manifest)
+            scanned    = sum(1 for v in manifest.values() if v.get("contains_scans"))
+            total_facts= sum(v.get("fact_count", 0) for v in manifest.values())
+            # OCR confidence (average across scanned docs)
+            ocr_confs  = [v.get("ocr_confidence", 1.0)
+                          for v in manifest.values() if v.get("contains_scans")]
+            ocr_avg    = sum(ocr_confs) / len(ocr_confs) if ocr_confs else 1.0
+            
+            audit       = AuditLog(str(idx_dir))
+            audit_ok, _ = audit.verify_chain()
+            refusals    = len(get_refusal_ledger(str(idx_dir)))
+        except Exception:
+            total_docs = scanned = total_facts = refusals = 0
+            ocr_avg = 1.0
+            audit_ok = True
+
+        if _NEW_UI:
+            c1, c2, c3, c4 = st.columns(4)
+            metric_tile("Documents",
+                        str(total_docs),
+                        f"{scanned} scanned · OCR {ocr_avg:.0%}" if scanned else "",
+                        col=c1)
+            metric_tile("Indexed Facts",
+                        f"{total_facts:,}",
+                        col=c2)
+            audit_lbl = "Intact" if audit_ok else "⚠ Broken"
+            metric_tile("Audit Chain", audit_lbl, col=c3)
+            metric_tile("Refusals", str(refusals), col=c4)
+        else:
+            stat_row([
+                {"label": "Documents",     "value": str(total_docs)},
+                {"label": "Indexed Facts", "value": f"{total_facts:,}"},
+                {"label": "Audit Chain",   "value": "Intact" if audit_ok else "⚠ Broken",
+                 "color": COLORS["success_text"] if audit_ok else COLORS["danger_text"]},
+                {"label": "Refusals",      "value": str(refusals)},
+            ])
 
     st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
 
-    # Two columns: Continue studying + Topics
-    left, right = st.columns([1.2, 1], gap="medium")
+    # Two columns: Continue studying + Topics (STUDENT ONLY)
+    if is_student:
+        left, right = st.columns([1.2, 1], gap="medium")
 
-    with left:
-        st.markdown('<div class="tr-card">', unsafe_allow_html=True)
-        st.markdown("**Continue studying**")
-        
-        # Try to get current flashcard
-        current_card = None
-        try:
-            from study.flashcards import get_next_card
-            current_card = get_next_card()
-        except Exception:
-            pass
+        with left:
+            st.markdown('<div class="tr-card">', unsafe_allow_html=True)
+            st.markdown("**Continue studying**")
+            
+            # Try to get current flashcard from session
+            current_card = None
+            if st.session_state.get("study_all_cards"):
+                cards = st.session_state.study_all_cards
+                unmastered = [c for c in cards if not c.get("mastered")]
+                if unmastered:
+                    current_card = unmastered[0]
 
-        if current_card and _NEW_UI:
-            st.markdown(f"""
-            <div class="tr-card-navy" style="margin:0.75rem 0;">
-                <div class="tr-flashcard-q">{current_card.get('question','')}</div>
-                <div style="margin-top:0.75rem;">
-                    {source_chip(current_card.get('doc',''), current_card.get('page',1), True)}
+            if current_card and _NEW_UI:
+                st.markdown(f"""
+                <div class="tr-card-navy" style="margin:0.75rem 0;">
+                    <div class="tr-flashcard-q">{current_card.get('front','')}</div>
+                    <div style="margin-top:0.75rem;">
+                        {source_chip(current_card.get('doc',''), current_card.get('page',1), True)}
+                    </div>
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            b1, b2, b3 = st.columns(3)
-            with b1:
-                if st.button("Review again", key="home_card_again"):
-                    st.info("Moved to review")
-            with b2:
-                if st.button("Show answer", key="home_card_flip", type="primary"):
-                    st.session_state["show_card_answer"] = True
-                    st.rerun()
-            with b3:
-                if st.button("I knew it", key="home_card_knew"):
-                    st.success("Next card")
-            
-            if st.session_state.get("show_card_answer"):
-                st.markdown(f"**Answer:** {current_card.get('answer','')}")
-            
-            # Deck progress
-            if _NEW_UI:
-                try:
-                    from study.leitner import get_box_counts
-                    counts = get_box_counts()
-                    total_cards = sum(counts.values())
-                    reviewed = sum(counts.get(i,0) for i in [2,3,4,5])
-                    pct = reviewed / total_cards if total_cards else 0
+                """, unsafe_allow_html=True)
+                
+                b1, b2, b3 = st.columns(3)
+                with b1:
+                    if st.button("Review again", key="home_card_again"):
+                        st.info("Moved to review")
+                with b2:
+                    if st.button("Show answer", key="home_card_flip", type="primary"):
+                        st.session_state["show_card_answer"] = True
+                        st.rerun()
+                with b3:
+                    if st.button("I knew it", key="home_card_knew"):
+                        st.success("Next card")
+                
+                if st.session_state.get("show_card_answer"):
+                    st.markdown(f"**Answer:** {current_card.get('back','')}")
+                
+                # Deck progress
+                if _NEW_UI and st.session_state.get("study_all_cards"):
+                    cards = st.session_state.study_all_cards
+                    mastered = sum(1 for c in cards if c.get("mastered"))
+                    total = len(cards)
+                    pct = mastered / total if total else 0
                     from ui.components import progress_bar
-                    progress_bar(pct, f"Deck progress: {reviewed}/{total_cards}")
-                except Exception:
-                    pass
-        else:
-            if _NEW_UI:
-                empty_state("No cards yet", "Upload a PDF to generate flashcards")
+                    progress_bar(pct, f"Deck progress: {mastered}/{total}")
             else:
-                st.info("Upload documents to start studying.")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+                if _NEW_UI:
+                    empty_state("No cards yet", "Upload a PDF to generate flashcards")
+                else:
+                    st.info("Upload documents to start studying.")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
 
-    with right:
-        st.markdown('<div class="tr-card">', unsafe_allow_html=True)
-        st.markdown("**Topics**")
-        
-        try:
-            from study.topics import get_topics
-            topics = get_topics()
+        with right:
+            st.markdown('<div class="tr-card">', unsafe_allow_html=True)
+            st.markdown("**Topics**")
+            
+            topics = st.session_state.get("study_topics", [])
             if topics and _NEW_UI:
                 for t in topics[:6]:
-                    name = t.get("name", "Unknown")
-                    mastery = t.get("mastery", 0)
+                    name = t.get("title", "Unknown")
+                    # Calculate mastery from cards
+                    tid = t.get("id")
+                    cards = st.session_state.get("study_all_cards", [])
+                    topic_cards = [c for c in cards if c.get("topic_id") == tid]
+                    mastered = sum(1 for c in topic_cards if c.get("mastered"))
+                    mastery = (mastered / len(topic_cards) * 100) if topic_cards else 0
                     st.markdown(f"""
                     <div style="margin-bottom:0.75rem;">
                         <div style="font-size:13px;font-weight:600;color:#0B1F33;margin-bottom:0.25rem;">
@@ -365,18 +387,17 @@ def _page_home(user: dict, idx_dir: Path, pdf_dir: Path) -> None:
                 empty_state("No topics yet", "Topics are extracted from your documents")
             else:
                 st.caption("Topics will appear here")
-        except Exception:
-            if _NEW_UI:
-                empty_state("No topics yet")
-            else:
-                st.caption("Topics unavailable")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown("<div style='height:1rem;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:1rem;'></div>", unsafe_allow_html=True)
 
-    # Bottom row: Recent answers + Videos
-    r_left, r_right = st.columns(2, gap="medium")
+    # Bottom row: Recent answers (all roles) + Videos (student only)
+    if is_student:
+        r_left, r_right = st.columns(2, gap="medium")
+    else:
+        r_left = st.container()
+        r_right = None
 
     with r_left:
         st.markdown('<div class="tr-card">', unsafe_allow_html=True)
@@ -422,19 +443,18 @@ def _page_home(user: dict, idx_dir: Path, pdf_dir: Path) -> None:
         
         st.markdown('</div>', unsafe_allow_html=True)
 
-    with r_right:
-        st.markdown('<div class="tr-card">', unsafe_allow_html=True)
-        st.markdown("**Recommended videos**")
-        
-        if is_gov:
-            st.caption("Videos unavailable in offline mode")
-        else:
-            try:
-                from study.topics import get_topics
-                topics = get_topics()
+    if is_student and r_right:
+        with r_right:
+            st.markdown('<div class="tr-card">', unsafe_allow_html=True)
+            st.markdown("**Recommended videos**")
+            
+            if is_gov:
+                st.caption("Videos unavailable in offline mode")
+            else:
+                topics = st.session_state.get("study_topics", [])
                 if topics and _NEW_UI:
                     for t in topics[:3]:
-                        name = t.get("name", "")
+                        name = t.get("title", "")
                         st.markdown(f"""
                         <div style="padding:0.5rem 0;border-bottom:1px solid #F4F7FA;">
                             <div style="font-size:13px;font-weight:600;color:#0B1F33;">{name}</div>
@@ -449,13 +469,8 @@ def _page_home(user: dict, idx_dir: Path, pdf_dir: Path) -> None:
                     empty_state("No topics yet", "Topics are extracted from uploaded documents")
                 else:
                     st.caption("Topics unavailable")
-            except Exception:
-                if _NEW_UI:
-                    empty_state("Topics unavailable")
-                else:
-                    st.caption("Error loading topics")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
 def _nav_label(role: str, page: str) -> str:
     """Find the full nav label (icon + name) for a page name."""
     items = NAV_ITEMS.get(role, [])
